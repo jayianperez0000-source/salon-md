@@ -1,0 +1,6 @@
+{
+  "name": "Salon MD - Service & Promotions Catalog",
+  "description": "Official showcase and categorized service catalog for Salon MD at Circle C Mall, Quezon City. Browse hair, nails, lashes, waxing, massage services, monthly promos, and location details.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
