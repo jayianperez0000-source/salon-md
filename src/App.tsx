@@ -12,8 +12,10 @@ import { PackageCalculatorModal } from './components/PackageCalculatorModal';
 import { ProposalInfoModal } from './components/ProposalInfoModal';
 import { BookingModal } from './components/BookingModal';
 import { MyBookingsModal } from './components/MyBookingsModal';
+import { AdminPortalModal } from './components/AdminPortalModal';
 import { SERVICES_DATA } from './data/salonData';
 import { BookingRecord } from './types';
+import { ShieldCheck } from 'lucide-react';
 
 export default function App() {
   const [selectedServices, setSelectedServices] = useState<{ [serviceId: string]: number }>({});
@@ -24,6 +26,7 @@ export default function App() {
   const [isBookingOpen, setIsBookingOpen] = useState(false);
   const [bookingPreselected, setBookingPreselected] = useState<{ [serviceId: string]: number }>({});
   const [isMyBookingsOpen, setIsMyBookingsOpen] = useState(false);
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
 
   const cartCount = Object.values(selectedServices).reduce((sum, qty) => sum + qty, 0);
 
@@ -93,6 +96,7 @@ export default function App() {
           setIsBookingOpen(true);
         }}
         onOpenMyBookings={() => setIsMyBookingsOpen(true)}
+        onOpenAdmin={() => setIsAdminOpen(true)}
       />
 
       {/* Main Content */}
@@ -108,6 +112,7 @@ export default function App() {
             setBookingPreselected(selectedServices);
             setIsBookingOpen(true);
           }}
+          onOpenAdmin={() => setIsAdminOpen(true)}
         />
 
         {/* Priority: Must — Promotions Section */}
@@ -135,7 +140,10 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <Footer onOpenProposal={() => setIsProposalOpen(true)} />
+      <Footer 
+        onOpenProposal={() => setIsProposalOpen(true)} 
+        onOpenAdmin={() => setIsAdminOpen(true)}
+      />
 
       {/* Interactive Pamper Package Calculator Modal */}
       <PackageCalculatorModal
@@ -175,6 +183,26 @@ export default function App() {
         isOpen={isProposalOpen}
         onClose={() => setIsProposalOpen(false)}
       />
+
+      {/* Staff & Admin Management Portal (CRUD, DB & Custom QR Code) */}
+      <AdminPortalModal
+        isOpen={isAdminOpen}
+        onClose={() => setIsAdminOpen(false)}
+        allServices={SERVICES_DATA}
+      />
+
+      {/* Floating Admin & Database Portal Quick Access Button */}
+      <div className="fixed bottom-5 right-5 z-40">
+        <button
+          onClick={() => setIsAdminOpen(true)}
+          className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-full bg-stone-900/95 hover:bg-stone-900 text-stone-200 hover:text-white shadow-xl border border-stone-700/80 backdrop-blur-md text-xs font-bold transition-all hover:scale-105"
+          title="Staff & Admin Portal (CRUD & QR Settings)"
+        >
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <ShieldCheck className="w-4 h-4 text-rose-400" />
+          <span>Admin Portal</span>
+        </button>
+      </div>
     </div>
   );
 }
