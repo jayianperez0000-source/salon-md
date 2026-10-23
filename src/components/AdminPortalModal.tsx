@@ -284,6 +284,30 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
     reader.readAsDataURL(file);
   };
 
+  const handleAutoGenerateQr = (channel: 'gcash' | 'maya') => {
+    const rawNum = paymentConfig[channel].accountNumber.replace(/[^0-9]/g, '');
+    const cleanNum = rawNum || '09175847219';
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(cleanNum)}`;
+    setPaymentConfig(prev => ({
+      ...prev,
+      [channel]: {
+        ...prev[channel],
+        qrImage: qrUrl
+      }
+    }));
+  };
+
+  const handleResetQr = (channel: 'gcash' | 'maya') => {
+    const defaultUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=09175847219`;
+    setPaymentConfig(prev => ({
+      ...prev,
+      [channel]: {
+        ...prev[channel],
+        qrImage: defaultUrl
+      }
+    }));
+  };
+
   const handleSavePaymentConfig = (e: React.FormEvent) => {
     e.preventDefault();
     saveStoredPaymentConfig(paymentConfig);
@@ -797,12 +821,49 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                     )}
                   </div>
 
+                  {/* Free QR Code Step-by-Step Guide Banner */}
+                  <div className="p-5 bg-gradient-to-r from-stone-900 via-stone-850 to-stone-900 text-white rounded-3xl border border-stone-800 shadow-sm space-y-3">
+                    <div className="flex items-center gap-2 text-rose-300 font-bold text-sm">
+                      <Sparkles className="w-4 h-4 text-rose-400" />
+                      <span>How to Add Free QR Code Payments (0% Gateway Fees)</span>
+                    </div>
+                    <p className="text-xs text-stone-300 leading-relaxed">
+                      Salon MD uses direct e-wallet QR transfers. Every peso goes 100% straight to your salon account with zero payment gateway processing cuts or monthly subscription fees!
+                    </p>
+                    <div className="grid sm:grid-cols-3 gap-3 text-xs text-stone-300 pt-1">
+                      <div className="p-3 bg-white/5 rounded-2xl border border-white/10 space-y-1">
+                        <span className="font-bold text-white block flex items-center gap-1.5">
+                          <span className="w-5 h-5 rounded-full bg-rose-500/30 text-rose-300 flex items-center justify-center text-[10px]">1</span>
+                          Open GCash / Maya
+                        </span>
+                        <p className="text-[11px] text-stone-400">Open your app and tap <strong>Receive</strong> or <strong>Generate QR</strong>.</p>
+                      </div>
+                      <div className="p-3 bg-white/5 rounded-2xl border border-white/10 space-y-1">
+                        <span className="font-bold text-white block flex items-center gap-1.5">
+                          <span className="w-5 h-5 rounded-full bg-rose-500/30 text-rose-300 flex items-center justify-center text-[10px]">2</span>
+                          Save QR Screenshot
+                        </span>
+                        <p className="text-[11px] text-stone-400">Tap &apos;Save to Photos&apos; or take a quick screenshot of your QR screen.</p>
+                      </div>
+                      <div className="p-3 bg-white/5 rounded-2xl border border-white/10 space-y-1">
+                        <span className="font-bold text-white block flex items-center gap-1.5">
+                          <span className="w-5 h-5 rounded-full bg-rose-500/30 text-rose-300 flex items-center justify-center text-[10px]">3</span>
+                          Upload or Auto-Generate
+                        </span>
+                        <p className="text-[11px] text-stone-400">Upload your image below, or click <strong>Auto-Generate QR</strong> for instant setup!</p>
+                      </div>
+                    </div>
+                  </div>
+
                   <form onSubmit={handleSavePaymentConfig} className="space-y-8">
                     {/* GCASH QR CONFIGURATION */}
                     <div className="p-6 bg-white border border-stone-200 rounded-3xl shadow-sm space-y-5">
                       <div className="flex items-center gap-2.5 text-blue-900 font-bold border-b border-stone-100 pb-3">
                         <QrCode className="w-5 h-5 text-blue-600" />
                         <span className="font-serif text-lg">GCash Merchant & QR Code</span>
+                        <span className="ml-auto text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                          0% Transaction Fee
+                        </span>
                       </div>
 
                       <div className="grid md:grid-cols-12 gap-6 items-start">
@@ -821,17 +882,28 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                             )}
                           </div>
 
-                          <label className="cursor-pointer px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs flex items-center gap-1.5">
-                            <Upload className="w-3.5 h-3.5" />
-                            <span>Upload New GCash QR</span>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => handleQrUpload('gcash', e)}
-                              className="hidden"
-                            />
-                          </label>
-                          <span className="text-[10px] text-stone-400">PNG or JPG screenshot from GCash app</span>
+                          <div className="flex flex-col gap-1.5 w-full">
+                            <label className="cursor-pointer px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs flex items-center justify-center gap-1.5 w-full">
+                              <Upload className="w-3.5 h-3.5" />
+                              <span>Upload GCash QR (Image)</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => handleQrUpload('gcash', e)}
+                                className="hidden"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => handleAutoGenerateQr('gcash')}
+                              className="px-3 py-1.5 bg-white hover:bg-stone-100 text-stone-700 rounded-xl text-xs font-semibold transition-colors border border-stone-200 flex items-center justify-center gap-1.5 w-full"
+                              title="Generate standard scannable QR code from current mobile number"
+                            >
+                              <QrCode className="w-3.5 h-3.5 text-blue-600" />
+                              <span>Auto-Generate from Number</span>
+                            </button>
+                          </div>
+                          <span className="text-[10px] text-stone-400">PNG, JPG or instant generated QR</span>
                         </div>
 
                         {/* GCash Inputs */}
@@ -889,6 +961,9 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                       <div className="flex items-center gap-2.5 text-emerald-900 font-bold border-b border-stone-100 pb-3">
                         <QrCode className="w-5 h-5 text-emerald-600" />
                         <span className="font-serif text-lg">Maya / QR Ph Merchant & QR Code</span>
+                        <span className="ml-auto text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          Bayanihan QR Ph Ready
+                        </span>
                       </div>
 
                       <div className="grid md:grid-cols-12 gap-6 items-start">
@@ -907,16 +982,28 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                             )}
                           </div>
 
-                          <label className="cursor-pointer px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs flex items-center gap-1.5">
-                            <Upload className="w-3.5 h-3.5" />
-                            <span>Upload New Maya QR</span>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => handleQrUpload('maya', e)}
-                              className="hidden"
-                            />
-                          </label>
+                          <div className="flex flex-col gap-1.5 w-full">
+                            <label className="cursor-pointer px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs flex items-center justify-center gap-1.5 w-full">
+                              <Upload className="w-3.5 h-3.5" />
+                              <span>Upload Maya QR (Image)</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => handleQrUpload('maya', e)}
+                                className="hidden"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => handleAutoGenerateQr('maya')}
+                              className="px-3 py-1.5 bg-white hover:bg-stone-100 text-stone-700 rounded-xl text-xs font-semibold transition-colors border border-stone-200 flex items-center justify-center gap-1.5 w-full"
+                              title="Generate standard scannable QR code from current mobile number"
+                            >
+                              <QrCode className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Auto-Generate from Number</span>
+                            </button>
+                          </div>
+                          <span className="text-[10px] text-stone-400">QR Ph or Maya wallet screenshot</span>
                         </div>
 
                         {/* Maya Inputs */}
