@@ -23,10 +23,12 @@ import {
   AlertCircle,
   Phone,
   Mail,
-  ChevronRight
+  ChevronRight,
+  Download
 } from 'lucide-react';
 import { ServiceItem, Stylist, BookingRecord, PaymentMethod, PaymentPlan } from '../types';
-import { BUSINESS_INFO, STYLISTS_DATA, TIME_SLOTS, PAYMENT_CONFIG } from '../data/salonData';
+import { BUSINESS_INFO, STYLISTS_DATA, TIME_SLOTS } from '../data/salonData';
+import { getStoredPaymentConfig, saveStoredBookings, getStoredBookings } from '../utils/storage';
 
 interface BookingModalProps {
   isOpen: boolean;
@@ -74,11 +76,14 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   // Confirmation State
   const [confirmedBooking, setConfirmedBooking] = useState<BookingRecord | null>(null);
   const [copiedReceipt, setCopiedReceipt] = useState(false);
+  const [copiedNumber, setCopiedNumber] = useState<'gcash' | 'maya' | ''>('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [paymentConfig, setPaymentConfig] = useState(getStoredPaymentConfig());
 
   // Sync initial selections if modal opens with pre-selected items
   useEffect(() => {
     if (isOpen) {
+      setPaymentConfig(getStoredPaymentConfig());
       if (Object.keys(initialSelectedServices).length > 0) {
         setSelectedServices(initialSelectedServices);
       }
@@ -103,13 +108,13 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
   // Discounts
   const multiServiceDiscount = totalCount >= 3 ? Math.round(subtotal * 0.10) : 0;
-  const fullPrepayDiscount = paymentPlan === 'full' ? Math.round((subtotal - multiServiceDiscount) * PAYMENT_CONFIG.prepayFullDiscountPercent) : 0;
+  const fullPrepayDiscount = paymentPlan === 'full' ? Math.round((subtotal - multiServiceDiscount) * paymentConfig.prepayFullDiscountPercent) : 0;
   const totalDiscount = multiServiceDiscount + fullPrepayDiscount;
   const totalAmount = Math.max(0, subtotal - totalDiscount);
 
   // Down Payment calculation
   const downPaymentAmount = paymentPlan === 'downpayment'
-    ? Math.max(200, Math.round(totalAmount * PAYMENT_CONFIG.downpaymentPercent))
+    ? Math.max(200, Math.round(totalAmount * paymentConfig.downpaymentPercent))
     : totalAmount;
   const balanceDue = paymentPlan === 'downpayment' ? totalAmount - downPaymentAmount : 0;
 
@@ -229,14 +234,12 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       status: 'confirmed'
     };
 
-    // Save to localStorage
+    // Save to database
     try {
-      const existingStr = localStorage.getItem('salon_md_bookings');
-      const existingList = existingStr ? JSON.parse(existingStr) : [];
-      const updatedList = [newBooking, ...existingList];
-      localStorage.setItem('salon_md_bookings', JSON.stringify(updatedList));
+      const existingList = getStoredBookings();
+      saveStoredBookings([newBooking, ...existingList]);
     } catch (e) {
-      console.error('Failed to save booking to localStorage', e);
+      console.error('Failed to save booking to database', e);
     }
 
     setConfirmedBooking(newBooking);
@@ -774,15 +777,69 @@ Thank you for choosing Salon MD! See you soon.`;
                 {paymentMethod === 'gcash' && (
                   <div className="space-y-4 animate-fade-in">
                     <div className="flex flex-col sm:flex-row items-center gap-4 bg-white p-4 rounded-xl border border-stone-200">
-                      <div className="w-24 h-24 rounded-lg bg-blue-50 border border-blue-200 flex flex-col items-center justify-center p-2 text-center shrink-0">
-                        <QrCode className="w-12 h-12 text-blue-600" />
-                        <span className="text-[9px] font-bold text-blue-700 mt-1">SCAN GCASH</span>
+                      <div className="flex flex-col items-center shrink-0">
+                        <div className="w-28 h-28 rounded-xl bg-blue-50 border border-blue-200 flex flex-col items-center justify-center p-1.5 text-center overflow-hidden bg-white shadow-2xs">
+                          {paymentConfig.gcash.qrImage ? (
+                            <img
+                              src={paymentConfig.gcash.qrImage}
+                              alt="GCash QR Code"
+                              className="w-full h-full object-contain"
+                            />
+                          ) : (
+                            <>
+                              <QrCode className="w-12 h-12 text-blue-600" />
+                              <span className="text-[9px] font-bold text-blue-700 mt-1">SCAN GCASH</span>
+                            </>
+                          )}
+                        </div>
+                        {paymentConfig.gcash.qrImage && (
+                          <a
+                            href={paymentConfig.gcash.qrImage}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download="Salon_MD_GCash_QR.png"
+                            className="text-[10px] text-blue-600 hover:text-blue-800 font-semibold inline-flex items-center gap-1 mt-1.5"
+                          >
+                            <Download className="w-3 h-3" />
+                            <span>Save / View QR</span>
+                          </a>
+                        )}
                       </div>
-                      <div className="space-y-1 text-xs sm:text-sm text-stone-700">
-                        <div className="text-[11px] font-bold text-blue-600 uppercase">Merchant GCash Account</div>
-                        <div className="font-bold text-stone-900">{PAYMENT_CONFIG.gcash.merchantName}</div>
-                        <div className="font-mono text-sm text-stone-800 font-bold">{PAYMENT_CONFIG.gcash.accountNumber}</div>
+                      <div className="space-y-1 text-xs sm:text-sm text-stone-700 w-full">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-blue-600 uppercase">Merchant GCash Account</span>
+                          <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                            0% Extra Fee
+                          </span>
+                        </div>
+                        <div className="font-bold text-stone-900">{paymentConfig.gcash.merchantName}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-sm text-stone-900 font-bold">{paymentConfig.gcash.accountNumber}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(paymentConfig.gcash.accountNumber.replace(/[^0-9]/g, ''));
+                              setCopiedNumber('gcash');
+                              setTimeout(() => setCopiedNumber(''), 2000);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-stone-100 hover:bg-stone-200 text-stone-700 text-[10px] font-semibold transition-colors border border-stone-200"
+                            title="Copy number to clipboard"
+                          >
+                            {copiedNumber === 'gcash' ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-600" />
+                                <span className="text-emerald-700 font-bold">Copied!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3 text-stone-500" />
+                                <span>Copy</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                         <div className="text-xs text-stone-500">Amount to send: <strong className="text-rose-900">₱{downPaymentAmount.toLocaleString()}</strong></div>
+                        <div className="text-[11px] text-stone-400 italic pt-0.5">{paymentConfig.gcash.qrNote}</div>
                       </div>
                     </div>
 
@@ -808,15 +865,69 @@ Thank you for choosing Salon MD! See you soon.`;
                 {paymentMethod === 'maya' && (
                   <div className="space-y-4 animate-fade-in">
                     <div className="flex flex-col sm:flex-row items-center gap-4 bg-white p-4 rounded-xl border border-stone-200">
-                      <div className="w-24 h-24 rounded-lg bg-emerald-50 border border-emerald-200 flex flex-col items-center justify-center p-2 text-center shrink-0">
-                        <QrCode className="w-12 h-12 text-emerald-600" />
-                        <span className="text-[9px] font-bold text-emerald-700 mt-1">SCAN MAYA QR</span>
+                      <div className="flex flex-col items-center shrink-0">
+                        <div className="w-28 h-28 rounded-xl bg-emerald-50 border border-emerald-200 flex flex-col items-center justify-center p-1.5 text-center overflow-hidden bg-white shadow-2xs">
+                          {paymentConfig.maya.qrImage ? (
+                            <img
+                              src={paymentConfig.maya.qrImage}
+                              alt="Maya QR Code"
+                              className="w-full h-full object-contain"
+                            />
+                          ) : (
+                            <>
+                              <QrCode className="w-12 h-12 text-emerald-600" />
+                              <span className="text-[9px] font-bold text-emerald-700 mt-1">SCAN MAYA QR</span>
+                            </>
+                          )}
+                        </div>
+                        {paymentConfig.maya.qrImage && (
+                          <a
+                            href={paymentConfig.maya.qrImage}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download="Salon_MD_Maya_QR.png"
+                            className="text-[10px] text-emerald-700 hover:text-emerald-900 font-semibold inline-flex items-center gap-1 mt-1.5"
+                          >
+                            <Download className="w-3 h-3" />
+                            <span>Save / View QR</span>
+                          </a>
+                        )}
                       </div>
-                      <div className="space-y-1 text-xs sm:text-sm text-stone-700">
-                        <div className="text-[11px] font-bold text-emerald-600 uppercase">Maya / QR Ph Merchant</div>
-                        <div className="font-bold text-stone-900">{PAYMENT_CONFIG.maya.merchantName}</div>
-                        <div className="font-mono text-sm text-stone-800 font-bold">{PAYMENT_CONFIG.maya.accountNumber}</div>
+                      <div className="space-y-1 text-xs sm:text-sm text-stone-700 w-full">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-emerald-600 uppercase">Maya / QR Ph Merchant</span>
+                          <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                            Bayanihan QR Ph
+                          </span>
+                        </div>
+                        <div className="font-bold text-stone-900">{paymentConfig.maya.merchantName}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-sm text-stone-900 font-bold">{paymentConfig.maya.accountNumber}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(paymentConfig.maya.accountNumber.replace(/[^0-9]/g, ''));
+                              setCopiedNumber('maya');
+                              setTimeout(() => setCopiedNumber(''), 2000);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-stone-100 hover:bg-stone-200 text-stone-700 text-[10px] font-semibold transition-colors border border-stone-200"
+                            title="Copy number to clipboard"
+                          >
+                            {copiedNumber === 'maya' ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-600" />
+                                <span className="text-emerald-700 font-bold">Copied!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3 text-stone-500" />
+                                <span>Copy</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                         <div className="text-xs text-stone-500">Amount to send: <strong className="text-rose-900">₱{downPaymentAmount.toLocaleString()}</strong></div>
+                        <div className="text-[11px] text-stone-400 italic pt-0.5">{paymentConfig.maya.qrNote}</div>
                       </div>
                     </div>
 
@@ -894,13 +1005,13 @@ Thank you for choosing Salon MD! See you soon.`;
                     <div className="grid sm:grid-cols-2 gap-3 text-xs bg-white p-3.5 rounded-xl border border-stone-200">
                       <div>
                         <span className="font-bold text-amber-900 block">BDO Unibank</span>
-                        <span className="text-stone-500 block">Acct: {PAYMENT_CONFIG.bank.bdo.accountName}</span>
-                        <span className="font-mono font-bold text-stone-800">{PAYMENT_CONFIG.bank.bdo.accountNumber}</span>
+                        <span className="text-stone-500 block">Acct: {paymentConfig.bank.bdo.accountName}</span>
+                        <span className="font-mono font-bold text-stone-800">{paymentConfig.bank.bdo.accountNumber}</span>
                       </div>
                       <div>
                         <span className="font-bold text-red-900 block">BPI (Bank of the Philippine Islands)</span>
-                        <span className="text-stone-500 block">Acct: {PAYMENT_CONFIG.bank.bpi.accountName}</span>
-                        <span className="font-mono font-bold text-stone-800">{PAYMENT_CONFIG.bank.bpi.accountNumber}</span>
+                        <span className="text-stone-500 block">Acct: {paymentConfig.bank.bpi.accountName}</span>
+                        <span className="font-mono font-bold text-stone-800">{paymentConfig.bank.bpi.accountNumber}</span>
                       </div>
                     </div>
 
