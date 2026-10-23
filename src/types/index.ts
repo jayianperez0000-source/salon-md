@@ -67,6 +67,8 @@ export interface Stylist {
   available: boolean;
 }
 
+export type PaymentVerificationStatus = 'verified' | 'pending' | 'flagged';
+
 export interface BookingRecord {
   id: string;
   createdAt: string;
@@ -96,5 +98,37 @@ export interface BookingRecord {
   balanceDue: number;
   paymentMethod: PaymentMethod;
   paymentReference: string;
+  paymentReceiptImage?: string; // Base64 screenshot of GCash/Maya confirmation
+  paymentVerificationStatus?: PaymentVerificationStatus; // 'verified' | 'pending' | 'flagged'
+  verifiedAt?: string;
   status: BookingStatus;
+  internalNotes?: string;
 }
+
+export interface PaymentGatewayConfig {
+  downpaymentPercent: number;
+  prepayFullDiscountPercent: number;
+  gcash: {
+    merchantName: string;
+    accountNumber: string;
+    qrImage: string;
+    qrNote: string;
+  };
+  maya: {
+    merchantName: string;
+    accountNumber: string;
+    qrImage: string;
+    qrNote: string;
+  };
+  bank: {
+    bdo: {
+      accountName: string;
+      accountNumber: string;
+    };
+    bpi: {
+      accountName: string;
+      accountNumber: string;
+    };
+  };
+}
+
