@@ -24,11 +24,14 @@ import {
   Phone,
   Mail,
   ChevronRight,
-  Download
+  Download,
+  Upload,
+  Image as ImageIcon,
+  FileCheck
 } from 'lucide-react';
 import { ServiceItem, Stylist, BookingRecord, PaymentMethod, PaymentPlan } from '../types';
 import { BUSINESS_INFO, STYLISTS_DATA, TIME_SLOTS } from '../data/salonData';
-import { getStoredPaymentConfig, saveStoredBookings, getStoredBookings } from '../utils/storage';
+import { getStoredPaymentConfig, saveStoredBookings, getStoredBookings, validatePaymentReference } from '../utils/storage';
 
 interface BookingModalProps {
   isOpen: boolean;
@@ -72,6 +75,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   const [cardExpiry, setCardExpiry] = useState('');
   const [cardCvv, setCardCvv] = useState('');
   const [cardName, setCardName] = useState('');
+  const [receiptImage, setReceiptImage] = useState('');
   
   // Confirmation State
   const [confirmedBooking, setConfirmedBooking] = useState<BookingRecord | null>(null);
@@ -178,11 +182,28 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     setStep(4);
   };
 
+  const handleReceiptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setErrorMsg('Image file size must be less than 5MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setReceiptImage(reader.result as string);
+      setErrorMsg('');
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleConfirmPaymentAndBook = () => {
     // Validation for online payment channels
     if (paymentMethod === 'gcash' || paymentMethod === 'maya' || paymentMethod === 'bank_transfer') {
-      if (!referenceNumber.trim() || referenceNumber.length < 4) {
-        setErrorMsg('Please enter the transaction reference / approval number from your payment app.');
+      const existingList = getStoredBookings();
+      const val = validatePaymentReference(referenceNumber, existingList);
+      if (!val.isValid) {
+        setErrorMsg(val.message);
         return;
       }
     } else if (paymentMethod === 'card') {
@@ -230,7 +251,9 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       paidAmount: downPaymentAmount,
       balanceDue,
       paymentMethod,
-      paymentReference: referenceNumber || `CARD-${Math.floor(100000 + Math.random() * 900000)}`,
+      paymentReference: referenceNumber.trim() || `CARD-${Math.floor(100000 + Math.random() * 900000)}`,
+      paymentReceiptImage: receiptImage || undefined,
+      paymentVerificationStatus: (paymentMethod === 'card') ? 'verified' : 'pending',
       status: 'confirmed'
     };
 
@@ -844,19 +867,63 @@ Thank you for choosing Salon MD! See you soon.`;
                     </div>
 
                     <div>
-                      <label className="text-xs font-bold text-stone-700 block mb-1">
-                        GCash Reference No. / Ref ID (9-13 Digits) *
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-stone-700">
+                          GCash Reference No. / Ref ID (9-13 Digits) *
+                        </label>
+                        <span className="text-[10px] text-blue-700 font-semibold bg-blue-50 px-1.5 py-0.5 rounded">
+                          Found in GCash SMS or App Receipt
+                        </span>
+                      </div>
                       <input
                         type="text"
                         placeholder="e.g. 9028 1402 8591"
                         value={referenceNumber}
                         onChange={(e) => setReferenceNumber(e.target.value)}
-                        className="w-full text-xs sm:text-sm px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-600 font-mono"
+                        className="w-full text-xs sm:text-sm px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-600 font-mono tracking-wide"
                       />
-                      <p className="text-[11px] text-stone-500 mt-1">
-                        Enter the reference number from your GCash confirmation SMS or transaction receipt.
-                      </p>
+                    </div>
+
+                    {/* Proof of Payment Upload */}
+                    <div className="pt-1 border-t border-stone-200/60">
+                      <label className="text-xs font-bold text-stone-700 block mb-1.5 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Attach GCash Confirmation Screenshot</span>
+                        </span>
+                        <span className="text-[10px] text-stone-400 font-medium">Fast-Tracks Verification</span>
+                      </label>
+                      {receiptImage ? (
+                        <div className="flex items-center gap-3 p-2.5 bg-blue-50/70 border border-blue-200 rounded-xl animate-fade-in">
+                          <img src={receiptImage} alt="GCash Receipt" className="w-12 h-12 object-cover rounded-lg border border-blue-300 shrink-0 shadow-2xs" />
+                          <div className="flex-1 min-w-0">
+                            <span className="text-xs font-bold text-blue-900 block truncate flex items-center gap-1">
+                              <FileCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>Screenshot Attached</span>
+                            </span>
+                            <span className="text-[10px] text-blue-700 block truncate">Salon staff can verify instantly upon receipt</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setReceiptImage('')}
+                            className="p-1.5 text-stone-400 hover:text-rose-600 rounded-lg hover:bg-white transition-colors"
+                            title="Remove attachment"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <label className="cursor-pointer flex items-center justify-center gap-2 p-2.5 bg-white hover:bg-blue-50/40 border border-dashed border-stone-300 hover:border-blue-300 rounded-xl text-xs font-medium text-stone-600 transition-all shadow-2xs">
+                          <Upload className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Tap to upload GCash receipt screenshot</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleReceiptUpload}
+                            className="hidden"
+                          />
+                        </label>
+                      )}
                     </div>
                   </div>
                 )}
@@ -932,16 +999,63 @@ Thank you for choosing Salon MD! See you soon.`;
                     </div>
 
                     <div>
-                      <label className="text-xs font-bold text-stone-700 block mb-1">
-                        Maya Reference No. / Transaction ID *
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-stone-700">
+                          Maya Reference No. / Transaction ID *
+                        </label>
+                        <span className="text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded">
+                          From Maya App Confirmation
+                        </span>
+                      </div>
                       <input
                         type="text"
                         placeholder="e.g. MYA-98124018"
                         value={referenceNumber}
                         onChange={(e) => setReferenceNumber(e.target.value)}
-                        className="w-full text-xs sm:text-sm px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-600 font-mono"
+                        className="w-full text-xs sm:text-sm px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-600 font-mono tracking-wide"
                       />
+                    </div>
+
+                    {/* Proof of Payment Upload for Maya */}
+                    <div className="pt-1 border-t border-stone-200/60">
+                      <label className="text-xs font-bold text-stone-700 block mb-1.5 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Attach Maya Receipt Screenshot</span>
+                        </span>
+                        <span className="text-[10px] text-stone-400 font-medium">Fast-Tracks Verification</span>
+                      </label>
+                      {receiptImage ? (
+                        <div className="flex items-center gap-3 p-2.5 bg-emerald-50/70 border border-emerald-200 rounded-xl animate-fade-in">
+                          <img src={receiptImage} alt="Maya Receipt" className="w-12 h-12 object-cover rounded-lg border border-emerald-300 shrink-0 shadow-2xs" />
+                          <div className="flex-1 min-w-0">
+                            <span className="text-xs font-bold text-emerald-900 block truncate flex items-center gap-1">
+                              <FileCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>Screenshot Attached</span>
+                            </span>
+                            <span className="text-[10px] text-emerald-700 block truncate">Salon staff can verify instantly upon receipt</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setReceiptImage('')}
+                            className="p-1.5 text-stone-400 hover:text-rose-600 rounded-lg hover:bg-white transition-colors"
+                            title="Remove attachment"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <label className="cursor-pointer flex items-center justify-center gap-2 p-2.5 bg-white hover:bg-emerald-50/40 border border-dashed border-stone-300 hover:border-emerald-300 rounded-xl text-xs font-medium text-stone-600 transition-all shadow-2xs">
+                          <Upload className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Tap to upload Maya receipt screenshot</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleReceiptUpload}
+                            className="hidden"
+                          />
+                        </label>
+                      )}
                     </div>
                   </div>
                 )}
