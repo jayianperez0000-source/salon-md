@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, Phone, Clock, MapPin, Menu, X, ShoppingBag, GraduationCap, ChevronRight, Calendar, BookmarkCheck } from 'lucide-react';
+import { Sparkles, Phone, Clock, MapPin, Menu, X, ShoppingBag, GraduationCap, ChevronRight, Calendar, BookmarkCheck, ShieldCheck } from 'lucide-react';
 import { BUSINESS_INFO } from '../data/salonData';
 
 interface NavbarProps {
@@ -8,6 +8,7 @@ interface NavbarProps {
   onOpenProposal: () => void;
   onOpenBooking: () => void;
   onOpenMyBookings: () => void;
+  onOpenAdmin: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ 
@@ -15,7 +16,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenCart, 
   onOpenProposal,
   onOpenBooking,
-  onOpenMyBookings
+  onOpenMyBookings,
+  onOpenAdmin
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -40,49 +42,58 @@ export const Navbar: React.FC<NavbarProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center gap-4 text-[11px] sm:text-xs">
+          <div className="flex items-center justify-center flex-wrap gap-2.5 sm:gap-4 text-[11px] sm:text-xs">
+            <button
+              onClick={onOpenAdmin}
+              className="inline-flex items-center gap-1.5 text-stone-300 hover:text-rose-300 transition-colors font-medium bg-stone-800/80 hover:bg-stone-800 px-2 py-0.5 rounded-full border border-stone-700/60 shrink-0"
+              title="Admin & Database Portal"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-rose-400" />
+              <span>Admin Portal</span>
+            </button>
+            <span className="text-stone-700">|</span>
             <button
               onClick={onOpenMyBookings}
-              className="inline-flex items-center gap-1.5 text-rose-300 hover:text-white transition-colors font-medium"
+              className="inline-flex items-center gap-1 text-rose-300 hover:text-white transition-colors font-medium shrink-0"
             >
               <BookmarkCheck className="w-3.5 h-3.5" />
-              <span>Track My Bookings</span>
+              <span>Track Bookings</span>
             </button>
-            <span className="hidden sm:inline text-stone-600">|</span>
-            <span className="flex items-center gap-1 text-stone-300">
+            <span className="hidden md:inline text-stone-700">|</span>
+            <span className="hidden md:flex items-center gap-1 text-stone-300 shrink-0">
               <Clock className="w-3 h-3 text-rose-400" />
               Mall Hours: {BUSINESS_INFO.operatingHours.weekdays}
             </span>
-            <span className="hidden sm:inline text-stone-600">|</span>
+            <span className="hidden sm:inline text-stone-700">|</span>
             <button
               onClick={onOpenProposal}
-              className="inline-flex items-center gap-1.5 text-stone-300 hover:text-white transition-colors font-medium underline-offset-4 hover:underline"
+              className="hidden sm:inline-flex items-center gap-1 text-stone-300 hover:text-white transition-colors font-medium underline-offset-4 hover:underline shrink-0"
             >
               <GraduationCap className="w-3.5 h-3.5 text-rose-400" />
-              <span>BSIT Proposal Specs</span>
+              <span>BSIT Proposal</span>
             </button>
           </div>
         </div>
       </div>
 
       {/* Main Navigation */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-20">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between h-18 sm:h-20">
           {/* Logo */}
-          <a href="#" className="flex items-center gap-3 group">
-            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-stone-900 to-rose-950 flex items-center justify-center text-white shadow-md border border-rose-900/20 group-hover:scale-105 transition-transform">
-              <span className="font-serif font-bold text-xl tracking-tight text-rose-100">MD</span>
+          <a href="#" className="flex items-center gap-2 sm:gap-3 group shrink-0">
+            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-gradient-to-br from-stone-900 to-rose-950 flex items-center justify-center text-white shadow-md border border-rose-900/20 group-hover:scale-105 transition-transform shrink-0">
+              <span className="font-serif font-bold text-lg sm:text-xl tracking-tight text-rose-100">MD</span>
             </div>
             <div>
               <div className="flex items-baseline gap-1.5">
-                <span className="font-serif text-2xl font-bold tracking-tight text-stone-900 group-hover:text-rose-900 transition-colors">
+                <span className="font-serif text-xl sm:text-2xl font-bold tracking-tight text-stone-900 group-hover:text-rose-900 transition-colors">
                   Salon MD
                 </span>
-                <span className="text-[10px] uppercase font-bold tracking-widest text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
-                  Circle C Mall
+                <span className="text-[9px] sm:text-[10px] uppercase font-bold tracking-widest text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
+                  Circle C
                 </span>
               </div>
-              <p className="text-xs text-stone-500 font-medium">Hair · Nails · Lashes · Massage · Home Service</p>
+              <p className="text-[11px] sm:text-xs text-stone-500 font-medium hidden md:block">Hair · Nails · Lashes · Massage · Home Service</p>
             </div>
           </a>
 
@@ -100,38 +111,48 @@ export const Navbar: React.FC<NavbarProps> = ({
           </nav>
 
           {/* Action Buttons */}
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-2.5">
             {/* Pamper Basket / Package Calculator Trigger */}
             <button
               onClick={onOpenCart}
-              className="relative inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-stone-100 hover:bg-stone-200/80 text-stone-800 text-xs sm:text-sm font-semibold transition-colors border border-stone-200"
+              className="relative inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl bg-stone-100 hover:bg-stone-200/80 text-stone-800 text-xs sm:text-sm font-semibold transition-colors border border-stone-200"
               aria-label="Open Pamper Package Calculator"
             >
               <Sparkles className="w-4 h-4 text-rose-700" />
               <span className="hidden xl:inline">Package Basket</span>
               {cartCount > 0 && (
-                <span className="inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-bold bg-rose-700 text-white rounded-full">
+                <span className="inline-flex items-center justify-center px-1.5 py-0.5 text-[10px] sm:text-xs font-bold bg-rose-700 text-white rounded-full min-w-4 text-center">
                   {cartCount}
                 </span>
               )}
             </button>
 
-            {/* NEW: Book Appointment Button with Down Payment */}
+            {/* Book Appointment Button with Down Payment */}
             <button
               onClick={onOpenBooking}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-rose-800 hover:bg-rose-900 text-white text-xs sm:text-sm font-bold transition-colors shadow-sm"
+              className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-rose-800 hover:bg-rose-900 text-white text-xs sm:text-sm font-bold transition-colors shadow-sm shrink-0"
             >
-              <Calendar className="w-4 h-4" />
-              <span>Book Appointment</span>
+              <Calendar className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span>Book<span className="hidden sm:inline"> Appointment</span></span>
+            </button>
+
+            {/* Admin Portal Button - Visible on Tablet and Laptop */}
+            <button
+              onClick={onOpenAdmin}
+              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 sm:py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white text-xs sm:text-sm font-bold transition-colors shadow-sm border border-stone-800 shrink-0"
+              title="Salon MD Admin Portal (Database, Bookings & QR)"
+            >
+              <ShieldCheck className="w-4 h-4 text-rose-400" />
+              <span>Admin</span>
             </button>
 
             {/* Mobile Menu Button */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 text-stone-600 hover:text-stone-900 lg:hidden rounded-lg hover:bg-stone-100"
+              className="p-2 text-stone-600 hover:text-stone-900 lg:hidden rounded-lg hover:bg-stone-100 shrink-0"
               aria-label="Toggle menu"
             >
-              {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+              {mobileMenuOpen ? <X className="w-5 h-5 sm:w-6 sm:h-6" /> : <Menu className="w-5 h-5 sm:w-6 sm:h-6" />}
             </button>
           </div>
         </div>
@@ -175,6 +196,17 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <BookmarkCheck className="w-4 h-4 text-rose-700" />
               <span>Track My Existing Reservations</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setMobileMenuOpen(false);
+                onOpenAdmin();
+              }}
+              className="w-full flex items-center justify-center gap-2 p-2.5 rounded-xl bg-stone-900 text-stone-200 hover:text-white text-xs font-semibold"
+            >
+              <ShieldCheck className="w-4 h-4 text-rose-400" />
+              <span>Admin & Staff Portal (Manage DB & QR)</span>
             </button>
 
             <button
