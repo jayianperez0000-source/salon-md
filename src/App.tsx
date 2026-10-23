@@ -185,11 +185,13 @@ export default function App() {
       />
 
       {/* Staff & Admin Management Portal (CRUD, DB & Custom QR Code) */}
-      <AdminPortalModal
-        isOpen={isAdminOpen}
-        onClose={() => setIsAdminOpen(false)}
-        allServices={SERVICES_DATA}
-      />
+      {isAdminOpen && (
+        <AdminPortalModal
+          isOpen={isAdminOpen}
+          onClose={() => setIsAdminOpen(false)}
+          allServices={SERVICES_DATA}
+        />
+      )}
 
       {/* Floating Admin & Database Portal Quick Access Button */}
       <div className="fixed bottom-5 right-5 z-40">
