@@ -43,8 +43,10 @@ export const INITIAL_SEED_BOOKINGS: BookingRecord[] = [
     balanceDue: 1462,
     paymentMethod: 'gcash',
     paymentReference: 'GC-90284102914',
+    paymentVerificationStatus: 'verified',
+    verifiedAt: new Date(Date.now() - 3600000 * 3).toLocaleString(),
     status: 'confirmed',
-    internalNotes: 'Deposit ₱487 verified via GCash. Chair 2 reserved.'
+    internalNotes: 'Deposit ₱487 verified via GCash SMS. Chair 2 reserved.'
   },
   {
     id: 'SMD-2026-8922',
@@ -83,8 +85,9 @@ export const INITIAL_SEED_BOOKINGS: BookingRecord[] = [
     balanceDue: 0,
     paymentMethod: 'maya',
     paymentReference: 'MYA-884102941',
+    paymentVerificationStatus: 'pending',
     status: 'confirmed',
-    internalNotes: 'Paid in full online with 5% promo discount.'
+    internalNotes: 'Paid in full online with 5% promo discount. Awaiting SMS cross-check.'
   },
   {
     id: 'SMD-2026-8919',
@@ -244,4 +247,58 @@ export const exportBookingsToCSV = (bookings: BookingRecord[]) => {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+};
+
+export interface ReferenceValidationResult {
+  isValid: boolean;
+  message: string;
+  isDuplicate: boolean;
+}
+
+export const validatePaymentReference = (
+  ref: string,
+  existingBookings: BookingRecord[],
+  currentBookingId?: string
+): ReferenceValidationResult => {
+  const clean = ref.trim().replace(/\s+/g, '');
+  if (!clean) {
+    return { isValid: false, message: 'Please enter your payment reference number.', isDuplicate: false };
+  }
+
+  // Minimum length check (GCash standard is 9-13 digits, Maya is 8-12 alphanumeric)
+  if (clean.length < 8) {
+    return { 
+      isValid: false, 
+      message: 'Reference number is too short. Please enter the full reference number (usually 9 to 13 digits) from your GCash or Maya confirmation.', 
+      isDuplicate: false 
+    };
+  }
+
+  // Obvious test/dummy checks
+  const lower = clean.toLowerCase();
+  const dummyStrings = ['12345678', '00000000', '11111111', '99999999', 'test', 'sample', 'asdfghjk', 'qwerty'];
+  if (dummyStrings.some(d => lower.includes(d))) {
+    return {
+      isValid: false,
+      message: 'Please enter a genuine transaction reference number from your payment app.',
+      isDuplicate: false
+    };
+  }
+
+  // Duplicate receipt check across existing bookings
+  const duplicate = existingBookings.find(b => 
+    b.id !== currentBookingId && 
+    b.paymentReference &&
+    b.paymentReference.replace(/\s+/g, '').toLowerCase() === clean.toLowerCase()
+  );
+
+  if (duplicate) {
+    return {
+      isValid: false,
+      message: `Duplicate Reference Detected: This reference number is already registered under booking ${duplicate.id} (${duplicate.customer.name}). Each appointment must have a unique payment receipt.`,
+      isDuplicate: true
+    };
+  }
+
+  return { isValid: true, message: 'Valid format', isDuplicate: false };
 };
