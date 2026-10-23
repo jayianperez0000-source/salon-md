@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   ShieldCheck, 
-  KeyRound, 
+    KeyRound, 
   Calendar, 
   Clock, 
   User, 
@@ -110,7 +110,21 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
     }
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  // Filtered Bookings calculation (Direct computation without hooks)
+  const filteredBookings = bookings.filter(b => {
+    if (statusFilter !== 'all' && b.status !== statusFilter) return false;
+    if (stylistFilter !== 'all' && b.stylist !== stylistFilter) return false;
+    if (dateFilter && b.date !== dateFilter) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const matchesName = b.customer.name.toLowerCase().includes(q);
+      const matchesMobile = b.customer.mobile.toLowerCase().includes(q);
+      const matchesId = b.id.toLowerCase().includes(q);
+      const matchesRef = b.paymentReference.toLowerCase().includes(q);
+      if (!matchesName && !matchesMobile && !matchesId && !matchesRef) return false;
+    }
+    return true;
+  });
 
   // Authentication logic
   const handleLogin = (e: React.FormEvent) => {
@@ -325,30 +339,14 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
     }
   };
 
-  // Filtered Bookings calculation
-  const filteredBookings = useMemo(() => {
-    return bookings.filter(b => {
-      if (statusFilter !== 'all' && b.status !== statusFilter) return false;
-      if (stylistFilter !== 'all' && b.stylist !== stylistFilter) return false;
-      if (dateFilter && b.date !== dateFilter) return false;
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchesName = b.customer.name.toLowerCase().includes(q);
-        const matchesMobile = b.customer.mobile.toLowerCase().includes(q);
-        const matchesId = b.id.toLowerCase().includes(q);
-        const matchesRef = b.paymentReference.toLowerCase().includes(q);
-        if (!matchesName && !matchesMobile && !matchesId && !matchesRef) return false;
-      }
-      return true;
-    });
-  }, [bookings, statusFilter, stylistFilter, dateFilter, searchQuery]);
-
   // Financial Analytics
   const totalRevenueDeposits = bookings.reduce((sum, b) => sum + (b.status !== 'cancelled' ? b.paidAmount : 0), 0);
   const totalBalancePending = bookings.reduce((sum, b) => sum + (b.status === 'confirmed' ? b.balanceDue : 0), 0);
   const todayStr = new Date().toISOString().split('T')[0];
   const todayCount = bookings.filter(b => b.date === todayStr && b.status !== 'cancelled').length;
   const confirmedCount = bookings.filter(b => b.status === 'confirmed').length;
+
+  if (!isOpen) return null;
 
   return (
     <div 
