@@ -664,13 +664,13 @@ export const PAYMENT_CONFIG = {
   gcash: {
     merchantName: 'SALON MD CIRCLE C MALL',
     accountNumber: '0917 584 7219',
-    qrImage: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=400&q=80',
+    qrImage: 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=09175847219',
     qrNote: 'Scan with GCash app to send reservation fee'
   },
   maya: {
     merchantName: 'SALON MD BEAUTY HUB',
     accountNumber: '0917 584 7219',
-    qrImage: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=400&q=80',
+    qrImage: 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=09175847219',
     qrNote: 'Scan using Maya / QR Ph compliant banking apps'
   },
   bank: {
