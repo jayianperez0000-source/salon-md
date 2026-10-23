@@ -30,7 +30,11 @@ import {
   FileText,
   Save,
   Building2,
-  Home
+  Home,
+  Copy,
+  ExternalLink,
+  ShieldAlert,
+  Image as ImageIcon
 } from 'lucide-react';
 import { BookingRecord, PaymentGatewayConfig, ServiceItem, Stylist } from '../types';
 import { BUSINESS_INFO, STYLISTS_DATA, TIME_SLOTS } from '../data/salonData';
@@ -69,8 +73,14 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
   const [bookings, setBookings] = useState<BookingRecord[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'confirmed' | 'completed' | 'cancelled'>('all');
+  const [verificationFilter, setVerificationFilter] = useState<'all' | 'pending' | 'verified' | 'flagged'>('all');
   const [dateFilter, setDateFilter] = useState('');
   const [stylistFilter, setStylistFilter] = useState('all');
+
+  // Payment Verification Inspector modal state
+  const [verifyingBooking, setVerifyingBooking] = useState<BookingRecord | null>(null);
+  const [previewReceiptImage, setPreviewReceiptImage] = useState<string | null>(null);
+  const [copiedRef, setCopiedRef] = useState<string | null>(null);
 
   // Edit / Add modal state
   const [isEditing, setIsEditing] = useState(false);
@@ -113,6 +123,10 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
   // Filtered Bookings calculation (Direct computation without hooks)
   const filteredBookings = bookings.filter(b => {
     if (statusFilter !== 'all' && b.status !== statusFilter) return false;
+    if (verificationFilter !== 'all') {
+      const v = b.paymentVerificationStatus || 'pending';
+      if (v !== verificationFilter) return false;
+    }
     if (stylistFilter !== 'all' && b.stylist !== stylistFilter) return false;
     if (dateFilter && b.date !== dateFilter) return false;
     if (searchQuery.trim()) {
@@ -174,6 +188,32 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
     });
     setBookings(updated);
     saveStoredBookings(updated);
+  };
+
+  // Payment Verification Action
+  const handleUpdateVerification = (bookingId: string, status: 'verified' | 'flagged' | 'pending') => {
+    const updated = bookings.map(b => {
+      if (b.id === bookingId) {
+        const isVerified = status === 'verified';
+        const isFlagged = status === 'flagged';
+        return {
+          ...b,
+          paymentVerificationStatus: status,
+          verifiedAt: isVerified ? new Date().toLocaleString() : undefined,
+          internalNotes: isVerified 
+            ? `${b.internalNotes || ''} (Verified by staff via e-wallet on ${new Date().toLocaleDateString()})`.trim()
+            : isFlagged
+            ? `${b.internalNotes || ''} (FLAGGED: Reference number not found in salon e-wallet)`.trim()
+            : b.internalNotes
+        };
+      }
+      return b;
+    });
+    setBookings(updated);
+    saveStoredBookings(updated);
+    if (verifyingBooking && verifyingBooking.id === bookingId) {
+      setVerifyingBooking(updated.find(b => b.id === bookingId) || null);
+    }
   };
 
   // Delete appointment
@@ -369,6 +409,7 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
   const todayStr = new Date().toISOString().split('T')[0];
   const todayCount = bookings.filter(b => b.date === todayStr && b.status !== 'cancelled').length;
   const confirmedCount = bookings.filter(b => b.status === 'confirmed').length;
+  const pendingVerificationCount = bookings.filter(b => (b.paymentVerificationStatus === 'pending' || !b.paymentVerificationStatus) && b.status !== 'cancelled' && b.paymentMethod !== 'card').length;
 
   if (!isOpen) return null;
 
@@ -570,10 +611,39 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                   </div>
                 </div>
 
+                {/* Unverified Online Payments Alert Banner */}
+                {pendingVerificationCount > 0 && (
+                  <div className="p-3 sm:p-4 bg-amber-50 border border-amber-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between text-xs text-amber-900 gap-2.5 animate-fade-in shadow-2xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-7 h-7 rounded-lg bg-amber-500/20 text-amber-800 flex items-center justify-center shrink-0 font-bold">
+                        {pendingVerificationCount}
+                      </div>
+                      <div>
+                        <span className="font-bold block sm:inline">
+                          {pendingVerificationCount} Online Payment(s) Need Staff Verification
+                        </span>
+                        <span className="text-amber-700 block sm:inline sm:ml-1 text-[11px]">
+                          — Check your salon phone SMS (from 2882/Maya) or attached receipts before confirming slots.
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setVerificationFilter(verificationFilter === 'pending' ? 'all' : 'pending')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-colors ${
+                        verificationFilter === 'pending'
+                          ? 'bg-amber-900 text-white'
+                          : 'bg-amber-200/80 hover:bg-amber-300 text-amber-950'
+                      }`}
+                    >
+                      {verificationFilter === 'pending' ? 'Show All Bookings' : 'Filter Needs Check'}
+                    </button>
+                  </div>
+                )}
+
                 {/* Search & Filters */}
                 <div className="bg-stone-50 p-3.5 sm:p-4 rounded-2xl border border-stone-200 space-y-3">
                   <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center">
-                    <div className="sm:col-span-5 relative">
+                    <div className="sm:col-span-4 relative">
                       <Search className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                       <input
                         type="text"
@@ -584,16 +654,29 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                       />
                     </div>
 
-                    <div className="sm:col-span-3">
+                    <div className="sm:col-span-2">
                       <select
                         value={statusFilter}
                         onChange={(e) => setStatusFilter(e.target.value as any)}
                         className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-700 focus:outline-none focus:ring-1 focus:ring-stone-900"
                       >
-                        <option value="all">Status: All Appointments</option>
-                        <option value="confirmed">Confirmed / Reserved</option>
-                        <option value="completed">Completed & Paid</option>
+                        <option value="all">Status: All</option>
+                        <option value="confirmed">Confirmed</option>
+                        <option value="completed">Completed</option>
                         <option value="cancelled">Cancelled</option>
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <select
+                        value={verificationFilter}
+                        onChange={(e) => setVerificationFilter(e.target.value as any)}
+                        className="w-full px-2.5 py-2 bg-white border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-700 focus:outline-none focus:ring-1 focus:ring-stone-900 font-medium"
+                      >
+                        <option value="all">Verification: All</option>
+                        <option value="pending">🟡 Needs Check ({pendingVerificationCount})</option>
+                        <option value="verified">🟢 Verified Online</option>
+                        <option value="flagged">🔴 Flagged / Unpaid</option>
                       </select>
                     </div>
 
@@ -612,6 +695,7 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                         onClick={() => {
                           setSearchQuery('');
                           setStatusFilter('all');
+                          setVerificationFilter('all');
                           setDateFilter('');
                           setStylistFilter('all');
                         }}
@@ -738,9 +822,48 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                                     Fully Paid
                                   </span>
                                 )}
-                                <div className="text-[10px] text-stone-400 uppercase mt-0.5">
+                                <div className="text-[10px] text-stone-500 uppercase mt-0.5 font-mono">
                                   {b.paymentMethod} · {b.paymentReference.slice(-8)}
                                 </div>
+
+                                {/* Verification Status Indicator */}
+                                {(b.paymentMethod === 'gcash' || b.paymentMethod === 'maya') && (
+                                  <div className="mt-1">
+                                    {b.paymentVerificationStatus === 'verified' ? (
+                                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 bg-emerald-100/80 border border-emerald-300 px-1.5 py-0.5 rounded-md">
+                                        <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                        Verified
+                                      </span>
+                                    ) : b.paymentVerificationStatus === 'flagged' ? (
+                                      <button
+                                        onClick={() => setVerifyingBooking(b)}
+                                        className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-800 bg-rose-100 hover:bg-rose-200 border border-rose-300 px-1.5 py-0.5 rounded-md transition-colors"
+                                      >
+                                        <ShieldAlert className="w-2.5 h-2.5 text-rose-600" />
+                                        Flagged Unpaid
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => setVerifyingBooking(b)}
+                                        className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 px-1.5 py-0.5 rounded-md transition-colors shadow-xs"
+                                        title="Click to cross-check this payment"
+                                      >
+                                        <AlertCircle className="w-2.5 h-2.5 text-amber-600 animate-pulse" />
+                                        Verify Ref
+                                      </button>
+                                    )}
+
+                                    {b.paymentReceiptImage && (
+                                      <button
+                                        onClick={() => setVerifyingBooking(b)}
+                                        className="flex items-center gap-1 text-[10px] text-purple-700 hover:text-purple-900 hover:underline font-semibold mt-0.5"
+                                      >
+                                        <ImageIcon className="w-2.5 h-2.5" />
+                                        View receipt
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
                               </td>
 
                               {/* Status Badge */}
@@ -759,6 +882,23 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                               {/* Action controls */}
                               <td className="p-3.5 align-top text-right space-y-1">
                                 <div className="flex items-center justify-end gap-1">
+                                  {/* Online Payment Inspector Button */}
+                                  {(b.paymentMethod === 'gcash' || b.paymentMethod === 'maya') && (
+                                    <button
+                                      onClick={() => setVerifyingBooking(b)}
+                                      className={`p-1.5 rounded-lg border text-xs font-semibold transition-colors ${
+                                        b.paymentVerificationStatus === 'verified'
+                                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                                          : b.paymentVerificationStatus === 'flagged'
+                                          ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                                          : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                                      }`}
+                                      title="Inspect Reference Number & Proof of Payment"
+                                    >
+                                      <ShieldCheck className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+
                                   {b.status !== 'completed' && (
                                     <button
                                       onClick={() => handleUpdateStatus(b.id, 'completed')}
@@ -1516,6 +1656,309 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* Payment Verification Inspector Modal */}
+        {verifyingBooking && (
+          <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
+            <div className="bg-white rounded-2xl max-w-xl w-full p-5 sm:p-6 shadow-2xl border border-stone-200 max-h-[92vh] flex flex-col">
+              {/* Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-stone-100 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className={`p-2 rounded-xl ${
+                    verifyingBooking.paymentVerificationStatus === 'verified'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : verifyingBooking.paymentVerificationStatus === 'flagged'
+                      ? 'bg-rose-100 text-rose-800'
+                      : 'bg-amber-100 text-amber-800'
+                  }`}>
+                    <ShieldCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-stone-900 text-base flex items-center gap-2">
+                      Online Payment Legitimacy Check
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                        verifyingBooking.paymentVerificationStatus === 'verified'
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          : verifyingBooking.paymentVerificationStatus === 'flagged'
+                          ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                          : 'bg-amber-100 text-amber-800 border border-amber-300'
+                      }`}>
+                        {verifyingBooking.paymentVerificationStatus || 'Pending Check'}
+                      </span>
+                    </h3>
+                    <p className="text-xs text-stone-500">Cross-reference reference number and salon SMS notifications</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setVerifyingBooking(null)}
+                  className="p-1 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Scrollable Content */}
+              <div className="space-y-4 py-4 overflow-y-auto text-xs">
+                {/* Reference Number Card */}
+                <div className="p-3.5 bg-stone-900 text-white rounded-xl space-y-2">
+                  <div className="flex items-center justify-between text-stone-400 text-[11px]">
+                    <span className="font-bold uppercase tracking-wider flex items-center gap-1.5">
+                      <QrCode className="w-3.5 h-3.5 text-rose-400" />
+                      {verifyingBooking.paymentMethod.toUpperCase()} Reference Number
+                    </span>
+                    <span className="text-stone-300 font-mono text-[10px]">
+                      Booking ID: {verifyingBooking.id}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 bg-stone-800 p-2.5 rounded-lg border border-stone-700">
+                    <span className="font-mono text-base font-bold text-emerald-400 tracking-wider break-all select-all">
+                      {verifyingBooking.paymentReference}
+                    </span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(verifyingBooking.paymentReference);
+                        setCopiedRef(verifyingBooking.paymentReference);
+                        setTimeout(() => setCopiedRef(null), 2000);
+                      }}
+                      className="px-2.5 py-1.5 bg-stone-700 hover:bg-stone-600 text-white rounded-md font-semibold text-[11px] shrink-0 flex items-center gap-1 transition-colors"
+                    >
+                      {copiedRef === verifyingBooking.paymentReference ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-400" />
+                          Copied
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3" />
+                          Copy Ref
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px] pt-1 border-t border-stone-800">
+                    <span className="text-stone-300">
+                      Amount Paid: <strong className="text-white text-sm">₱{verifyingBooking.paidAmount.toLocaleString()}</strong>
+                      {verifyingBooking.balanceDue > 0 && (
+                        <span className="text-rose-400 ml-1.5 font-normal">(Balance: ₱{verifyingBooking.balanceDue.toLocaleString()})</span>
+                      )}
+                    </span>
+                    <span className="text-stone-400">
+                      Customer: <strong className="text-white font-medium">{verifyingBooking.customer.name}</strong> ({verifyingBooking.customer.mobile})
+                    </span>
+                  </div>
+                </div>
+
+                {/* Automated Security & Anti-Fraud Analysis */}
+                <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
+                  <h4 className="font-bold text-stone-800 flex items-center gap-1.5 text-xs">
+                    <Sparkles className="w-3.5 h-3.5 text-rose-800" />
+                    Automated Anti-Fraud Checks
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {/* Check 1: Length */}
+                    {(() => {
+                      const len = verifyingBooking.paymentReference.trim().length;
+                      const validLen = len >= 8;
+                      return (
+                        <div className={`p-2 rounded-lg border text-[11px] ${validLen ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'}`}>
+                          <div className="font-bold flex items-center gap-1">
+                            {validLen ? <CheckCircle2 className="w-3 h-3 text-emerald-600" /> : <AlertCircle className="w-3 h-3 text-rose-600" />}
+                            Length Check
+                          </div>
+                          <div className="text-[10px] mt-0.5 opacity-80">{len} chars ({validLen ? 'Valid length' : 'Too short'})</div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Check 2: Duplicate check */}
+                    {(() => {
+                      const isDuplicate = bookings.some(b => 
+                        b.id !== verifyingBooking.id && 
+                        b.paymentReference.trim().toLowerCase() === verifyingBooking.paymentReference.trim().toLowerCase()
+                      );
+                      return (
+                        <div className={`p-2 rounded-lg border text-[11px] ${!isDuplicate ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'}`}>
+                          <div className="font-bold flex items-center gap-1">
+                            {!isDuplicate ? <CheckCircle2 className="w-3 h-3 text-emerald-600" /> : <ShieldAlert className="w-3 h-3 text-rose-600" />}
+                            Uniqueness Check
+                          </div>
+                          <div className="text-[10px] mt-0.5 opacity-80">
+                            {!isDuplicate ? 'No duplicate ref found' : 'DUPLICATE! Used in other booking'}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Check 3: Pattern / Dummy check */}
+                    {(() => {
+                      const isDummy = /^(12345|00000|11111|99999|test|sample|fake|none|na|abc)/i.test(verifyingBooking.paymentReference.trim());
+                      return (
+                        <div className={`p-2 rounded-lg border text-[11px] ${!isDummy ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'}`}>
+                          <div className="font-bold flex items-center gap-1">
+                            {!isDummy ? <CheckCircle2 className="w-3 h-3 text-emerald-600" /> : <AlertCircle className="w-3 h-3 text-rose-600" />}
+                            Format Authenticity
+                          </div>
+                          <div className="text-[10px] mt-0.5 opacity-80">
+                            {!isDummy ? 'Normal reference format' : 'Suspicious test pattern'}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                {/* Uploaded Screenshot Proof */}
+                <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-stone-800 flex items-center gap-1.5 text-xs">
+                      <ImageIcon className="w-3.5 h-3.5 text-purple-700" />
+                      Customer Uploaded Receipt Screenshot
+                    </h4>
+                    {verifyingBooking.paymentReceiptImage && (
+                      <span className="text-[10px] font-bold text-purple-800 bg-purple-100 px-2 py-0.5 rounded-full">
+                        Attached by customer
+                      </span>
+                    )}
+                  </div>
+
+                  {verifyingBooking.paymentReceiptImage ? (
+                    <div className="space-y-2">
+                      <div 
+                        onClick={() => setPreviewReceiptImage(verifyingBooking.paymentReceiptImage || null)}
+                        className="group relative cursor-pointer overflow-hidden rounded-xl border border-purple-200 bg-stone-900 max-h-56 flex items-center justify-center"
+                      >
+                        <img 
+                          src={verifyingBooking.paymentReceiptImage} 
+                          alt="Customer Payment Receipt" 
+                          className="w-full max-h-56 object-contain transition-transform group-hover:scale-105"
+                        />
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white font-semibold text-xs gap-1.5">
+                          <Eye className="w-4 h-4" />
+                          Click to expand / zoom receipt
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-stone-500 italic">
+                        Tip: Check that the recipient name in the screenshot matches your salon's registered account name and the timestamp is close to the appointment date ({verifyingBooking.date} {verifyingBooking.timeSlot}).
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-amber-900 text-[11px] flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <strong>No screenshot uploaded by customer.</strong>
+                        <p className="mt-0.5 text-stone-600">
+                          Cross-reference against the salon official phone's SMS inbox below, or ask customer to present their GCash / Maya in-app transaction history when they arrive for service.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 3-Step Cross Check SOP Guide for Receptionist */}
+                <div className="p-3 bg-blue-50/70 rounded-xl border border-blue-200 text-[11px] text-blue-950 space-y-2">
+                  <h4 className="font-bold flex items-center gap-1.5 text-blue-900">
+                    <Phone className="w-3.5 h-3.5" />
+                    Salon Phone Cross-Check Guide (Free Method)
+                  </h4>
+                  <ol className="list-decimal pl-4 space-y-1 text-stone-700">
+                    <li>
+                      Open the official salon phone receiving payments ({BUSINESS_INFO.contact.mobile || BUSINESS_INFO.contact.phone}).
+                    </li>
+                    <li>
+                      Check SMS from <strong>{verifyingBooking.paymentMethod === 'gcash' ? '2882 (GCash)' : 'MAYA / MAYABANK'}</strong> or open the wallet app transaction history.
+                    </li>
+                    <li>
+                      Confirm that a payment of <strong>₱{verifyingBooking.paidAmount.toLocaleString()}</strong> was received with reference matching <strong>{verifyingBooking.paymentReference}</strong>.
+                    </li>
+                  </ol>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-3 border-t border-stone-100 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleUpdateVerification(verifyingBooking.id, 'verified');
+                      setVerifyingBooking(null);
+                    }}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center gap-1.5 text-xs transition-colors shadow-xs"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Approve & Mark Verified
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleUpdateVerification(verifyingBooking.id, 'flagged');
+                      setVerifyingBooking(null);
+                    }}
+                    className="px-3.5 py-2 bg-rose-100 hover:bg-rose-200 text-rose-800 border border-rose-300 rounded-xl font-bold flex items-center gap-1.5 text-xs transition-colors"
+                  >
+                    <ShieldAlert className="w-3.5 h-3.5" />
+                    Flag as Invalid / Unpaid
+                  </button>
+
+                  {verifyingBooking.paymentVerificationStatus && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleUpdateVerification(verifyingBooking.id, 'pending');
+                        setVerifyingBooking(null);
+                      }}
+                      className="px-3 py-2 text-stone-600 hover:text-stone-900 text-xs font-semibold"
+                    >
+                      Reset to Pending
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setVerifyingBooking(null)}
+                  className="px-4 py-2 border border-stone-200 hover:bg-stone-100 rounded-xl text-stone-700 font-semibold text-xs"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Receipt Screenshot Fullscreen Zoom Modal */}
+        {previewReceiptImage && (
+          <div 
+            onClick={() => setPreviewReceiptImage(null)}
+            className="fixed inset-0 z-70 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out animate-in fade-in"
+          >
+            <div className="relative max-w-2xl max-h-[90vh] bg-stone-900 rounded-2xl overflow-hidden shadow-2xl p-2 border border-stone-700" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-2 border-b border-stone-800 text-white text-xs">
+                <span className="font-bold flex items-center gap-1.5">
+                  <ImageIcon className="w-4 h-4 text-purple-400" />
+                  Proof of Payment Screenshot
+                </span>
+                <button
+                  onClick={() => setPreviewReceiptImage(null)}
+                  className="p-1 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-2 overflow-auto max-h-[78vh] flex items-center justify-center">
+                <img 
+                  src={previewReceiptImage} 
+                  alt="Full receipt" 
+                  className="max-h-[75vh] w-auto object-contain rounded-lg shadow-lg"
+                />
+              </div>
             </div>
           </div>
         )}
