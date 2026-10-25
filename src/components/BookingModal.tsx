@@ -27,11 +27,20 @@ import {
   Download,
   Upload,
   Image as ImageIcon,
-  FileCheck
+  FileCheck,
+  Timer
 } from 'lucide-react';
 import { ServiceItem, Stylist, BookingRecord, PaymentMethod, PaymentPlan } from '../types';
 import { BUSINESS_INFO, STYLISTS_DATA, TIME_SLOTS } from '../data/salonData';
-import { getStoredPaymentConfig, saveStoredBookings, getStoredBookings, validatePaymentReference } from '../utils/storage';
+import { 
+  getStoredPaymentConfig, 
+  saveStoredBookings, 
+  getStoredBookings, 
+  validatePaymentReference,
+  calculatePaymentDeadline,
+  formatTimeRemaining,
+  checkAndExpireOverdueBookings
+} from '../utils/storage';
 
 interface BookingModalProps {
   isOpen: boolean;
@@ -77,12 +86,14 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   const [cardName, setCardName] = useState('');
   const [receiptImage, setReceiptImage] = useState('');
   
-  // Confirmation State
+  // Confirmation State & Live Timer
   const [confirmedBooking, setConfirmedBooking] = useState<BookingRecord | null>(null);
   const [copiedReceipt, setCopiedReceipt] = useState(false);
-  const [copiedNumber, setCopiedNumber] = useState<'gcash' | 'maya' | ''>('');
+  const [copiedNumber, setCopiedNumber] = useState<'gcash' | 'maya' | 'bdo' | 'bpi' | ''>('');
   const [errorMsg, setErrorMsg] = useState('');
   const [paymentConfig, setPaymentConfig] = useState(getStoredPaymentConfig());
+  const [nowTimestamp, setNowTimestamp] = useState(Date.now());
+  const [step4HoldDeadline, setStep4HoldDeadline] = useState<number | null>(null);
 
   // Sync initial selections if modal opens with pre-selected items
   useEffect(() => {
@@ -94,6 +105,25 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       setErrorMsg('');
     }
   }, [isOpen, initialSelectedServices]);
+
+  // Live 1-second countdown ticker for slot reservation and receipt deadline
+  useEffect(() => {
+    if (!isOpen) return;
+    const interval = setInterval(() => {
+      setNowTimestamp(Date.now());
+      // If client is viewing a confirmed booking with a deadline, check if expired
+      if (confirmedBooking && confirmedBooking.status !== 'cancelled' && confirmedBooking.paymentDeadline) {
+        if (new Date(confirmedBooking.paymentDeadline).getTime() <= Date.now()) {
+          const { updatedBookings } = checkAndExpireOverdueBookings();
+          const refreshed = updatedBookings.find(b => b.id === confirmedBooking.id);
+          if (refreshed) {
+            setConfirmedBooking(refreshed);
+          }
+        }
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isOpen, confirmedBooking]);
 
   if (!isOpen) return null;
 
@@ -179,6 +209,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       return;
     }
     setErrorMsg('');
+    const holdMins = paymentConfig.autoCancelTimeoutMinutes || 15;
+    setStep4HoldDeadline(Date.now() + holdMins * 60 * 1000);
     setStep(4);
   };
 
@@ -201,7 +233,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     // Validation for online payment channels
     if (paymentMethod === 'gcash' || paymentMethod === 'maya' || paymentMethod === 'bank_transfer') {
       const existingList = getStoredBookings();
-      const val = validatePaymentReference(referenceNumber, existingList);
+      const val = validatePaymentReference(referenceNumber, existingList, undefined, paymentMethod);
       if (!val.isValid) {
         setErrorMsg(val.message);
         return;
@@ -222,10 +254,15 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     }
 
     const bookingId = `SMD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const nowIso = new Date().toISOString();
+    const timeoutMins = paymentConfig.autoCancelTimeoutMinutes || 15;
+    const paymentDeadline = (paymentMethod === 'card')
+      ? undefined
+      : calculatePaymentDeadline(nowIso, timeoutMins);
 
     const newBooking: BookingRecord = {
       id: bookingId,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
       services: bookedItems.map(item => ({
         id: item.service.id,
         name: item.service.name,
@@ -254,6 +291,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       paymentReference: referenceNumber.trim() || `CARD-${Math.floor(100000 + Math.random() * 900000)}`,
       paymentReceiptImage: receiptImage || undefined,
       paymentVerificationStatus: (paymentMethod === 'card') ? 'verified' : 'pending',
+      paymentDeadline,
       status: 'confirmed'
     };
 
@@ -563,20 +601,38 @@ Thank you for choosing Salon MD! See you soon.`;
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                   {TIME_SLOTS.map((slot) => {
                     const isSelected = selectedTimeSlot === slot.time;
+                    const existingList = getStoredBookings();
+                    const isBooked = existingList.some(b => 
+                      b.status !== 'cancelled' && 
+                      b.date === selectedDate && 
+                      b.timeSlot === slot.time &&
+                      (stylistId !== 'any' ? b.stylist === selectedStylist.name : false)
+                    );
+
                     return (
                       <button
                         key={slot.time}
                         type="button"
+                        disabled={isBooked}
                         onClick={() => setSelectedTimeSlot(slot.time)}
                         className={`p-3 rounded-xl border text-center transition-all ${
-                          isSelected
+                          isBooked
+                            ? 'bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed opacity-60'
+                            : isSelected
                             ? 'bg-stone-900 text-white border-stone-900 shadow-sm'
                             : 'bg-white text-stone-700 border-stone-200 hover:border-stone-300 hover:bg-stone-50'
                         }`}
+                        title={isBooked ? 'Slot already reserved by another client' : 'Click to select this slot'}
                       >
                         <div className="font-bold text-xs sm:text-sm">{slot.time}</div>
-                        <div className={`text-[10px] mt-0.5 ${isSelected ? 'text-rose-200' : 'text-emerald-700'}`}>
-                          Available Slot
+                        <div className={`text-[10px] mt-0.5 ${
+                          isBooked 
+                            ? 'text-stone-400 font-medium' 
+                            : isSelected 
+                            ? 'text-rose-200' 
+                            : 'text-emerald-700 font-medium'
+                        }`}>
+                          {isBooked ? 'Booked' : 'Available'}
                         </div>
                       </button>
                     );
@@ -680,6 +736,39 @@ Thank you for choosing Salon MD! See you soon.`;
           {/* ================= STEP 4: ONLINE PAYMENT & DOWN PAYMENT ================= */}
           {step === 4 && (
             <div className="space-y-6 animate-fade-in">
+              {/* Slot Reservation Hold Banner with Live Countdown */}
+              {step4HoldDeadline && (
+                <div className="p-3.5 bg-amber-50/90 border border-amber-300 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                  <div className="flex items-start sm:items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-amber-200/80 text-amber-900 flex items-center justify-center shrink-0">
+                      <Clock className="w-4 h-4 animate-spin-slow" />
+                    </div>
+                    <div>
+                      <div className="font-bold text-amber-950 text-xs flex items-center gap-2 flex-wrap">
+                        <span>Temporary Slot Hold Active</span>
+                        <span className="text-[10px] font-semibold bg-amber-200 text-amber-950 px-2 py-0.5 rounded-full">
+                          {selectedDate} @ {selectedTimeSlot}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-stone-600 mt-0.5">
+                        Your chosen stylist chair is held for you. Submit your payment reference before the timer expires to secure your appointment.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center sm:flex-col items-end shrink-0 justify-between sm:justify-center border-t sm:border-t-0 border-amber-200 pt-2 sm:pt-0">
+                    <span className="text-[10px] uppercase font-bold text-amber-800">Time Limit:</span>
+                    <span className="font-mono font-bold text-base text-amber-950">
+                      {(() => {
+                        const diff = Math.max(0, step4HoldDeadline - nowTimestamp);
+                        const m = Math.floor(diff / 60000);
+                        const s = Math.floor((diff % 60000) / 1000);
+                        return `${m}m ${s.toString().padStart(2, '0')}s`;
+                      })()}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Payment Plan Choice: Down Payment vs Full Payment */}
               <div className="space-y-2">
                 <label className="text-xs uppercase font-bold tracking-wider text-stone-500 block">
@@ -1116,30 +1205,124 @@ Thank you for choosing Salon MD! See you soon.`;
                 {/* BANK TRANSFER DETAILS */}
                 {paymentMethod === 'bank_transfer' && (
                   <div className="space-y-4 animate-fade-in">
-                    <div className="grid sm:grid-cols-2 gap-3 text-xs bg-white p-3.5 rounded-xl border border-stone-200">
+                    <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-xs text-amber-950 flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
                       <div>
+                        <strong className="block font-bold">QR Payment Not Available? Pay via Direct Bank Transfer</strong>
+                        <p className="mt-0.5 text-stone-600 text-[11px]">
+                          Transfer directly using BDO, BPI, or InstaPay/PESONet from any Philippine banking app or e-wallet. Please copy account details below, complete the transfer, and paste your transaction reference or trace number.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid sm:grid-cols-2 gap-3 text-xs bg-white p-3.5 rounded-xl border border-stone-200">
+                      <div className="space-y-1">
                         <span className="font-bold text-amber-900 block">BDO Unibank</span>
                         <span className="text-stone-500 block">Acct: {paymentConfig.bank.bdo.accountName}</span>
-                        <span className="font-mono font-bold text-stone-800">{paymentConfig.bank.bdo.accountNumber}</span>
+                        <div className="flex items-center gap-2 pt-0.5">
+                          <span className="font-mono font-bold text-stone-900 text-sm">{paymentConfig.bank.bdo.accountNumber}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(paymentConfig.bank.bdo.accountNumber.replace(/[^0-9]/g, ''));
+                              setCopiedNumber('bdo');
+                              setTimeout(() => setCopiedNumber(''), 2000);
+                            }}
+                            className="px-2 py-0.5 rounded bg-stone-100 hover:bg-stone-200 text-stone-700 text-[10px] font-semibold border border-stone-200 transition-colors"
+                          >
+                            {copiedNumber === 'bdo' ? 'Copied!' : 'Copy'}
+                          </button>
+                        </div>
                       </div>
-                      <div>
+                      <div className="space-y-1">
                         <span className="font-bold text-red-900 block">BPI (Bank of the Philippine Islands)</span>
                         <span className="text-stone-500 block">Acct: {paymentConfig.bank.bpi.accountName}</span>
-                        <span className="font-mono font-bold text-stone-800">{paymentConfig.bank.bpi.accountNumber}</span>
+                        <div className="flex items-center gap-2 pt-0.5">
+                          <span className="font-mono font-bold text-stone-900 text-sm">{paymentConfig.bank.bpi.accountNumber}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(paymentConfig.bank.bpi.accountNumber.replace(/[^0-9]/g, ''));
+                              setCopiedNumber('bpi');
+                              setTimeout(() => setCopiedNumber(''), 2000);
+                            }}
+                            className="px-2 py-0.5 rounded bg-stone-100 hover:bg-stone-200 text-stone-700 text-[10px] font-semibold border border-stone-200 transition-colors"
+                          >
+                            {copiedNumber === 'bpi' ? 'Copied!' : 'Copy'}
+                          </button>
+                        </div>
                       </div>
                     </div>
 
                     <div>
-                      <label className="text-xs font-bold text-stone-700 block mb-1">
-                        Bank Transfer Reference / Trace No. *
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-stone-700">
+                          Bank Transfer Reference / Trace No. *
+                        </label>
+                        <span className="text-[10px] text-amber-800 font-semibold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                          InstaPay / PESONet / BDO / BPI Ref
+                        </span>
+                      </div>
                       <input
                         type="text"
-                        placeholder="e.g. BDO-TRX-5912401"
+                        placeholder="e.g. BDO-TRX-5912401 or InstaPay Ref #1094812"
                         value={referenceNumber}
                         onChange={(e) => setReferenceNumber(e.target.value)}
-                        className="w-full text-xs sm:text-sm px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-stone-900 font-mono"
+                        className="w-full text-xs sm:text-sm px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-amber-700 font-mono tracking-wide"
                       />
+                    </div>
+
+                    {/* Proof of Payment Upload for Bank Transfer */}
+                    <div className="pt-1 border-t border-stone-200/60">
+                      <label className="text-xs font-bold text-stone-700 block mb-1.5 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <ImageIcon className="w-3.5 h-3.5 text-amber-700" />
+                          <span>Attach Bank Transfer Screenshot or Deposit Slip</span>
+                        </span>
+                        <span className="text-[10px] text-stone-400 font-medium">Fast-Tracks Verification</span>
+                      </label>
+                      {receiptImage ? (
+                        <div className="flex items-center gap-3 p-2.5 bg-amber-50/70 border border-amber-200 rounded-xl animate-fade-in">
+                          <img src={receiptImage} alt="Bank Transfer Receipt" className="w-12 h-12 object-cover rounded-lg border border-amber-300 shrink-0 shadow-2xs" />
+                          <div className="flex-1 min-w-0">
+                            <span className="text-xs font-bold text-amber-950 block truncate flex items-center gap-1">
+                              <FileCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>Bank Receipt Attached</span>
+                            </span>
+                            <span className="text-[10px] text-amber-800 block truncate">Salon staff will verify reference against bank records</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setReceiptImage('')}
+                            className="p-1.5 text-stone-400 hover:text-rose-600 rounded-lg hover:bg-white transition-colors"
+                            title="Remove attachment"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <label className="cursor-pointer flex items-center justify-center gap-2 p-2.5 bg-white hover:bg-amber-50/40 border border-dashed border-stone-300 hover:border-amber-400 rounded-xl text-xs font-medium text-stone-600 transition-all shadow-2xs">
+                          <Upload className="w-3.5 h-3.5 text-amber-700" />
+                          <span>Tap to upload bank receipt / transfer screenshot</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleReceiptUpload}
+                            className="hidden"
+                          />
+                        </label>
+                      )}
+                    </div>
+
+                    {/* Fraud Policy Warning */}
+                    <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 space-y-1">
+                      <span className="font-bold flex items-center gap-1.5 text-rose-800">
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-700 shrink-0" />
+                        Fraud Prevention & Slot Release Policy
+                      </span>
+                      <p className="text-[11px] text-rose-800 leading-relaxed">
+                        All bank transfer references are cross-referenced directly with our BDO & BPI accounts. If a reference number is found to be <strong>fake, unrecorded, or duplicate</strong>, the reservation will be <strong>automatically cancelled</strong> and the slot released for other clients.
+                      </p>
                     </div>
                   </div>
                 )}
@@ -1182,21 +1365,43 @@ Thank you for choosing Salon MD! See you soon.`;
           {/* ================= STEP 5: CONFIRMATION & RECEIPT ================= */}
           {step === 5 && confirmedBooking && (
             <div className="space-y-6 text-center py-4 animate-fade-in">
-              <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-sm">
-                <CheckCircle2 className="w-9 h-9" />
-              </div>
+              {confirmedBooking.status === 'cancelled' ? (
+                <>
+                  <div className="w-16 h-16 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto shadow-sm">
+                    <AlertCircle className="w-9 h-9" />
+                  </div>
 
-              <div className="space-y-1">
-                <span className="text-xs uppercase font-bold tracking-widest text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
-                  APPOINTMENT RESERVED & CONFIRMED
-                </span>
-                <h3 className="font-serif text-2xl sm:text-3xl font-bold text-stone-900 mt-2">
-                  We look forward to pampering you!
-                </h3>
-                <p className="text-xs sm:text-sm text-stone-500 max-w-md mx-auto">
-                  Your appointment slot has been locked with Salon MD Circle C Mall. An SMS confirmation will be sent to <strong>{confirmedBooking.customer.mobile}</strong>.
-                </p>
-              </div>
+                  <div className="space-y-1">
+                    <span className="text-xs uppercase font-bold tracking-widest text-rose-800 bg-rose-50 px-2.5 py-1 rounded-full border border-rose-200">
+                      RESERVATION CANCELLED — TIME LIMIT EXPIRED
+                    </span>
+                    <h3 className="font-serif text-2xl sm:text-3xl font-bold text-stone-900 mt-2">
+                      Payment Hold Expired
+                    </h3>
+                    <p className="text-xs sm:text-sm text-stone-500 max-w-md mx-auto">
+                      Your temporary hold for this appointment has expired. The time slot has been released back to our salon calendar.
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-sm">
+                    <CheckCircle2 className="w-9 h-9" />
+                  </div>
+
+                  <div className="space-y-1">
+                    <span className="text-xs uppercase font-bold tracking-widest text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                      APPOINTMENT RESERVED & LOCKED
+                    </span>
+                    <h3 className="font-serif text-2xl sm:text-3xl font-bold text-stone-900 mt-2">
+                      We look forward to pampering you!
+                    </h3>
+                    <p className="text-xs sm:text-sm text-stone-500 max-w-md mx-auto">
+                      Your appointment slot has been locked with Salon MD Circle C Mall. An SMS notification has been prepared for <strong>{confirmedBooking.customer.mobile}</strong>.
+                    </p>
+                  </div>
+                </>
+              )}
 
               {/* Printable Receipt Card */}
               <div className="bg-white border-2 border-dashed border-stone-300 rounded-3xl p-6 text-left space-y-4 shadow-sm max-w-xl mx-auto">
@@ -1269,30 +1474,103 @@ Thank you for choosing Salon MD! See you soon.`;
                     Payment Ref: {confirmedBooking.paymentReference}
                   </div>
                 </div>
+
+                {/* Online Payment Verification & Time Limit Status Alert */}
+                {confirmedBooking.status === 'cancelled' ? (
+                  <div className="p-4 bg-rose-50 border border-rose-300 rounded-2xl text-xs space-y-2 mt-3 animate-fade-in text-left">
+                    <div className="font-bold text-rose-950 flex items-center gap-1.5 text-sm">
+                      <AlertCircle className="w-4 h-4 text-rose-700 shrink-0" />
+                      <span>Appointment Automatically Cancelled</span>
+                    </div>
+                    <p className="text-rose-800 text-[11px] leading-relaxed">
+                      {confirmedBooking.cancellationReason || 'Payment time limit expired: No verified payment was confirmed within the allocated hold window.'}
+                    </p>
+                    <div className="pt-1.5 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmedBooking(null);
+                          setStep(2);
+                        }}
+                        className="px-4 py-2 bg-rose-800 hover:bg-rose-900 text-white rounded-xl font-bold text-xs transition-colors shadow-2xs"
+                      >
+                        Re-Select Time Slot & Book Again
+                      </button>
+                    </div>
+                  </div>
+                ) : confirmedBooking.paymentVerificationStatus === 'pending' ? (
+                  <div className="p-4 bg-amber-50/90 border border-amber-300 rounded-2xl text-xs space-y-2 mt-3 text-left animate-fade-in">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="font-bold text-amber-950 flex items-center gap-1.5 text-xs sm:text-sm">
+                        <Clock className="w-4 h-4 text-amber-700 shrink-0 animate-pulse" />
+                        <span>Payment Verification Window Active</span>
+                      </div>
+                      {confirmedBooking.paymentDeadline && (
+                        <span className={`font-mono font-bold px-2.5 py-1 rounded-lg text-xs ${
+                          formatTimeRemaining(confirmedBooking.paymentDeadline).isExpired
+                            ? 'bg-rose-200 text-rose-900'
+                            : 'bg-amber-200 text-amber-950'
+                        }`}>
+                          ⏱️ {formatTimeRemaining(confirmedBooking.paymentDeadline).text} left
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-stone-600 text-[11px] leading-relaxed">
+                      Our front desk is cross-checking reference <strong className="font-mono text-stone-900">{confirmedBooking.paymentReference}</strong> with bank/wallet records. Keep your payment app receipt screenshot accessible.
+                    </p>
+                    <div className="p-2.5 bg-white/80 rounded-xl border border-amber-200 text-[11px] text-amber-900 flex items-start sm:items-center gap-2">
+                      <Timer className="w-4 h-4 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
+                      <span>
+                        <strong>Automatic Cancellation Rule:</strong> If not confirmed or payment is unreceived within {paymentConfig.autoCancelTimeoutMinutes || 15} minutes, this appointment is automatically cancelled and the stylist slot is released.
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs space-y-1 mt-3 text-left">
+                    <div className="font-bold text-emerald-900 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Payment Reference Verified & Approved</span>
+                    </div>
+                    <p className="text-emerald-800 text-[11px]">
+                      Your down payment deposit has been verified by the salon front desk. Your slot is 100% guaranteed.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Action buttons on receipt */}
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+              <div className="flex flex-col sm:flex-row flex-wrap items-center justify-center gap-2.5 pt-2">
+                <a
+                  href={`sms:${confirmedBooking.customer.mobile.replace(/[^0-9]/g, '')}?body=${encodeURIComponent(
+                    `Salon MD Appointment Confirmed! Ref: ${confirmedBooking.id}. Date: ${confirmedBooking.date} @ ${confirmedBooking.timeSlot} with ${confirmedBooking.stylist}. Circle C Mall, Congressional Ave, QC. Tel: (02) 8920-5542.`
+                  )}`}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 text-xs font-semibold text-stone-800 transition-colors shadow-2xs"
+                  title="Open in native mobile SMS app"
+                >
+                  <Phone className="w-4 h-4 text-rose-700" />
+                  <span>Send to Phone SMS</span>
+                </a>
+
                 <button
                   onClick={handleCopyReceipt}
-                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 text-xs font-semibold text-stone-800 transition-colors shadow-2xs"
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 text-xs font-semibold text-stone-800 transition-colors shadow-2xs"
                 >
                   {copiedReceipt ? (
                     <>
                       <Check className="w-4 h-4 text-emerald-600" />
-                      <span className="text-emerald-700">Copied to Clipboard!</span>
+                      <span className="text-emerald-700">Copied!</span>
                     </>
                   ) : (
                     <>
                       <Copy className="w-4 h-4 text-stone-600" />
-                      <span>Copy Booking Details</span>
+                      <span>Copy Details</span>
                     </>
                   )}
                 </button>
 
                 <button
                   onClick={() => window.print()}
-                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 text-xs font-semibold text-stone-800 transition-colors shadow-2xs"
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 text-xs font-semibold text-stone-800 transition-colors shadow-2xs"
                 >
                   <Printer className="w-4 h-4 text-stone-600" />
                   <span>Print Receipt</span>
