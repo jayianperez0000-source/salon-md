@@ -101,13 +101,19 @@ export interface BookingRecord {
   paymentReceiptImage?: string; // Base64 screenshot of GCash/Maya confirmation
   paymentVerificationStatus?: PaymentVerificationStatus; // 'verified' | 'pending' | 'flagged'
   verifiedAt?: string;
+  paymentDeadline?: string; // ISO timestamp when reference verification hold expires
+  isAutoCancelledDueToTimeout?: boolean;
   status: BookingStatus;
+  cancellationReason?: string; // Reason if appointment was cancelled (e.g. invalid/fraudulent ref or time limit expired)
+  cancelledAt?: string;
   internalNotes?: string;
 }
 
 export interface PaymentGatewayConfig {
   downpaymentPercent: number;
   prepayFullDiscountPercent: number;
+  autoCancelTimeoutMinutes?: number; // Timeout in minutes for unpaid reference numbers (e.g. 15, 30, 60)
+  autoCancelEnabled?: boolean; // Whether auto-cancel is active
   gcash: {
     merchantName: string;
     accountNumber: string;
