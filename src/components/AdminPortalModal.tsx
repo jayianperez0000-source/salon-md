@@ -34,10 +34,13 @@ import {
   Copy,
   ExternalLink,
   ShieldAlert,
-  Image as ImageIcon
+  Image as ImageIcon,
+  MessageSquare,
+  Timer
 } from 'lucide-react';
 import { BookingRecord, PaymentGatewayConfig, ServiceItem, Stylist } from '../types';
 import { BUSINESS_INFO, STYLISTS_DATA, TIME_SLOTS } from '../data/salonData';
+import { MessageDispatcherModal } from './MessageDispatcherModal';
 import { 
   getStoredBookings, 
   saveStoredBookings, 
@@ -46,7 +49,10 @@ import {
   isAdminAuthenticated, 
   setAdminAuthenticated, 
   exportBookingsToCSV,
-  INITIAL_SEED_BOOKINGS 
+  cancelBookingDueToInvalidPayment,
+  INITIAL_SEED_BOOKINGS,
+  formatTimeRemaining,
+  checkAndExpireOverdueBookings
 } from '../utils/storage';
 
 interface AdminPortalModalProps {
@@ -81,11 +87,18 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
   const [verifyingBooking, setVerifyingBooking] = useState<BookingRecord | null>(null);
   const [previewReceiptImage, setPreviewReceiptImage] = useState<string | null>(null);
   const [copiedRef, setCopiedRef] = useState<string | null>(null);
+  const [showCancelPrompt, setShowCancelPrompt] = useState(false);
+  const [selectedCancelReason, setSelectedCancelReason] = useState('Fake or unverified reference number: No matching payment found in bank/wallet records.');
+  const [customCancelNote, setCustomCancelNote] = useState('');
 
   // Edit / Add modal state
   const [isEditing, setIsEditing] = useState(false);
   const [editingBooking, setEditingBooking] = useState<BookingRecord | null>(null);
   const [isNewBookingModalOpen, setIsNewBookingModalOpen] = useState(false);
+
+  // SMS & Messaging Dispatcher state
+  const [dispatchingBooking, setDispatchingBooking] = useState<BookingRecord | null>(null);
+  const [dispatcherTemplate, setDispatcherTemplate] = useState<'cancellation' | 'confirmation' | 'reminder' | 'custom'>('cancellation');
 
   // New manual booking form state
   const [newClientName, setNewClientName] = useState('');
@@ -103,12 +116,15 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
   const [newPaymentChannel, setNewPaymentChannel] = useState<'cash' | 'gcash' | 'maya' | 'card'>('cash');
   const [newNotes, setNewNotes] = useState('');
 
-  // Payment Config state
+  // Payment Config state & Live Ticker
   const [paymentConfig, setPaymentConfig] = useState<PaymentGatewayConfig>(getStoredPaymentConfig());
   const [paymentSavedMessage, setPaymentSavedMessage] = useState(false);
+  const [adminTicker, setAdminTicker] = useState(Date.now());
+  const [lastExpiredNotice, setLastExpiredNotice] = useState<string | null>(null);
 
-  // Refresh bookings from storage
+  // Refresh bookings from storage and evaluate auto-expirations
   const loadData = () => {
+    checkAndExpireOverdueBookings();
     setBookings(getStoredBookings());
     setPaymentConfig(getStoredPaymentConfig());
     setIsAuthenticated(isAdminAuthenticated());
@@ -117,8 +133,29 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       loadData();
+      const interval = setInterval(() => {
+        setAdminTicker(Date.now());
+        const res = checkAndExpireOverdueBookings();
+        if (res.expiredCount > 0) {
+          setBookings(getStoredBookings());
+          setLastExpiredNotice(`${res.expiredCount} overdue reservation(s) automatically cancelled and slots released.`);
+          setTimeout(() => setLastExpiredNotice(null), 5000);
+        }
+      }, 5000);
+      return () => clearInterval(interval);
     }
   }, [isOpen]);
+
+  const handleManualAutoCancelCheck = () => {
+    const res = checkAndExpireOverdueBookings();
+    setBookings(getStoredBookings());
+    if (res.expiredCount > 0) {
+      setLastExpiredNotice(`Successfully auto-cancelled ${res.expiredCount} overdue booking(s) and released slots.`);
+    } else {
+      setLastExpiredNotice('All active reference numbers are within valid time limits.');
+    }
+    setTimeout(() => setLastExpiredNotice(null), 4000);
+  };
 
   // Filtered Bookings calculation (Direct computation without hooks)
   const filteredBookings = bookings.filter(b => {
@@ -213,6 +250,22 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
     saveStoredBookings(updated);
     if (verifyingBooking && verifyingBooking.id === bookingId) {
       setVerifyingBooking(updated.find(b => b.id === bookingId) || null);
+    }
+  };
+
+  // Cancel appointment due to invalid / fraudulent reference number
+  const handleCancelForInvalidPayment = (bookingId: string, reason: string, note?: string) => {
+    const updated = cancelBookingDueToInvalidPayment(bookingId, reason, note);
+    setBookings(updated);
+    const cancelledRecord = updated.find(b => b.id === bookingId) || null;
+    if (verifyingBooking && verifyingBooking.id === bookingId) {
+      setVerifyingBooking(cancelledRecord);
+    }
+    setShowCancelPrompt(false);
+    // Auto-open dispatcher so staff can send SMS / Viber cancellation notice
+    if (cancelledRecord) {
+      setDispatchingBooking(cancelledRecord);
+      setDispatcherTemplate('cancellation');
     }
   };
 
@@ -410,6 +463,12 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
   const todayCount = bookings.filter(b => b.date === todayStr && b.status !== 'cancelled').length;
   const confirmedCount = bookings.filter(b => b.status === 'confirmed').length;
   const pendingVerificationCount = bookings.filter(b => (b.paymentVerificationStatus === 'pending' || !b.paymentVerificationStatus) && b.status !== 'cancelled' && b.paymentMethod !== 'card').length;
+  const overdueCount = bookings.filter(b => 
+    (b.status === 'confirmed' || b.status === 'pending') &&
+    b.paymentVerificationStatus !== 'verified' &&
+    b.paymentMethod !== 'card' &&
+    formatTimeRemaining(b.paymentDeadline).isExpired
+  ).length;
 
   if (!isOpen) return null;
 
@@ -611,9 +670,25 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                   </div>
                 </div>
 
-                {/* Unverified Online Payments Alert Banner */}
+                {/* Auto-Expiration Feedback Notice */}
+                {lastExpiredNotice && (
+                  <div className="p-3 bg-rose-50 border border-rose-300 rounded-2xl flex items-center justify-between text-xs text-rose-900 gap-2 animate-fade-in shadow-2xs">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-rose-700 shrink-0" />
+                      <span className="font-semibold">{lastExpiredNotice}</span>
+                    </div>
+                    <button
+                      onClick={() => setLastExpiredNotice(null)}
+                      className="text-rose-700 hover:text-rose-950 font-bold px-2 py-0.5 rounded"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+
+                {/* Unverified Online Payments & Expiration Alert Banner */}
                 {pendingVerificationCount > 0 && (
-                  <div className="p-3 sm:p-4 bg-amber-50 border border-amber-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between text-xs text-amber-900 gap-2.5 animate-fade-in shadow-2xs">
+                  <div className="p-3 sm:p-4 bg-amber-50 border border-amber-300 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between text-xs text-amber-900 gap-2.5 animate-fade-in shadow-2xs">
                     <div className="flex items-center gap-2.5">
                       <div className="w-7 h-7 rounded-lg bg-amber-500/20 text-amber-800 flex items-center justify-center shrink-0 font-bold">
                         {pendingVerificationCount}
@@ -623,20 +698,32 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                           {pendingVerificationCount} Online Payment(s) Need Staff Verification
                         </span>
                         <span className="text-amber-700 block sm:inline sm:ml-1 text-[11px]">
-                          — Check your salon phone SMS (from 2882/Maya) or attached receipts before confirming slots.
+                          — Reference numbers have a {paymentConfig.autoCancelTimeoutMinutes || 15}-minute time limit. Overdue slots are automatically cancelled.
                         </span>
                       </div>
                     </div>
-                    <button
-                      onClick={() => setVerificationFilter(verificationFilter === 'pending' ? 'all' : 'pending')}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-colors ${
-                        verificationFilter === 'pending'
-                          ? 'bg-amber-900 text-white'
-                          : 'bg-amber-200/80 hover:bg-amber-300 text-amber-950'
-                      }`}
-                    >
-                      {verificationFilter === 'pending' ? 'Show All Bookings' : 'Filter Needs Check'}
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {overdueCount > 0 && (
+                        <button
+                          onClick={handleManualAutoCancelCheck}
+                          className="px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-700 hover:bg-rose-800 text-white transition-colors flex items-center gap-1 shadow-2xs"
+                          title="Immediately cancel all bookings that exceeded their payment time limit"
+                        >
+                          <Timer className="w-3.5 h-3.5" />
+                          <span>Auto-Cancel Overdue ({overdueCount})</span>
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setVerificationFilter(verificationFilter === 'pending' ? 'all' : 'pending')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+                          verificationFilter === 'pending'
+                            ? 'bg-amber-900 text-white'
+                            : 'bg-amber-200/80 hover:bg-amber-300 text-amber-950'
+                        }`}
+                      >
+                        {verificationFilter === 'pending' ? 'Show All Bookings' : 'Filter Needs Check'}
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -826,9 +913,9 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                                   {b.paymentMethod} · {b.paymentReference.slice(-8)}
                                 </div>
 
-                                {/* Verification Status Indicator */}
-                                {(b.paymentMethod === 'gcash' || b.paymentMethod === 'maya') && (
-                                  <div className="mt-1">
+                                 {/* Verification Status & Countdown Indicator */}
+                                {(b.paymentMethod === 'gcash' || b.paymentMethod === 'maya' || b.paymentMethod === 'bank_transfer') && (
+                                  <div className="mt-1 space-y-1">
                                     {b.paymentVerificationStatus === 'verified' ? (
                                       <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 bg-emerald-100/80 border border-emerald-300 px-1.5 py-0.5 rounded-md">
                                         <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
@@ -843,14 +930,33 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                                         Flagged Unpaid
                                       </button>
                                     ) : (
-                                      <button
-                                        onClick={() => setVerifyingBooking(b)}
-                                        className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 px-1.5 py-0.5 rounded-md transition-colors shadow-xs"
-                                        title="Click to cross-check this payment"
-                                      >
-                                        <AlertCircle className="w-2.5 h-2.5 text-amber-600 animate-pulse" />
-                                        Verify Ref
-                                      </button>
+                                      <div className="space-y-1">
+                                        <button
+                                          onClick={() => setVerifyingBooking(b)}
+                                          className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 px-1.5 py-0.5 rounded-md transition-colors shadow-xs"
+                                          title="Click to cross-check this payment"
+                                        >
+                                          <AlertCircle className="w-2.5 h-2.5 text-amber-600 animate-pulse" />
+                                          Verify Ref
+                                        </button>
+                                        {b.paymentDeadline && (
+                                          <div>
+                                            {(() => {
+                                              const rem = formatTimeRemaining(b.paymentDeadline);
+                                              return (
+                                                <span className={`inline-flex items-center gap-1 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                                                  rem.isExpired 
+                                                    ? 'bg-rose-100 text-rose-800 border-rose-300' 
+                                                    : 'bg-amber-50 text-amber-900 border-amber-300'
+                                                }`}>
+                                                  <Clock className="w-2.5 h-2.5" />
+                                                  {rem.isExpired ? 'Expired' : `${rem.text} left`}
+                                                </span>
+                                              );
+                                            })()}
+                                          </div>
+                                        )}
+                                      </div>
                                     )}
 
                                     {b.paymentReceiptImage && (
@@ -877,13 +983,25 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                                 }`}>
                                   {b.status === 'confirmed' ? 'Reserved' : b.status}
                                 </span>
+                                {b.isAutoCancelledDueToTimeout && (
+                                  <div className="mt-1">
+                                    <span className="inline-flex items-center gap-1 text-[9px] font-bold text-stone-600 bg-stone-100 border border-stone-300 px-1.5 py-0.5 rounded">
+                                      ⏱️ Timed Out
+                                    </span>
+                                  </div>
+                                )}
+                                {b.status === 'cancelled' && b.cancellationReason && (
+                                  <div className="text-[10px] text-rose-700 font-medium max-w-[150px] line-clamp-2 mt-1" title={b.cancellationReason}>
+                                    ⚠️ {b.cancellationReason}
+                                  </div>
+                                )}
                               </td>
 
                               {/* Action controls */}
                               <td className="p-3.5 align-top text-right space-y-1">
                                 <div className="flex items-center justify-end gap-1">
                                   {/* Online Payment Inspector Button */}
-                                  {(b.paymentMethod === 'gcash' || b.paymentMethod === 'maya') && (
+                                  {(b.paymentMethod === 'gcash' || b.paymentMethod === 'maya' || b.paymentMethod === 'bank_transfer') && (
                                     <button
                                       onClick={() => setVerifyingBooking(b)}
                                       className={`p-1.5 rounded-lg border text-xs font-semibold transition-colors ${
@@ -908,6 +1026,24 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                                       <Check className="w-3.5 h-3.5" />
                                     </button>
                                   )}
+
+                                  {/* Send SMS / Notification Button */}
+                                  <button
+                                    onClick={() => {
+                                      setDispatchingBooking(b);
+                                      setDispatcherTemplate(
+                                        b.status === 'cancelled'
+                                          ? 'cancellation'
+                                          : b.paymentVerificationStatus === 'verified'
+                                          ? 'confirmation'
+                                          : 'reminder'
+                                      );
+                                    }}
+                                    className="p-1.5 rounded-lg bg-stone-100 text-stone-700 hover:bg-rose-50 hover:text-rose-900 border border-stone-200 text-xs font-semibold transition-colors"
+                                    title="Send SMS / Viber / WhatsApp notification to client"
+                                  >
+                                    <MessageSquare className="w-3.5 h-3.5" />
+                                  </button>
 
                                   <button
                                     onClick={() => {
@@ -1222,6 +1358,71 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                             <option value={0.05}>5% Prepayment Discount (Default)</option>
                             <option value={0.10}>10% Prepayment Discount</option>
                           </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* TIME LIMIT & AUTO-CANCELLATION POLICY SETTINGS */}
+                    <div className="p-6 bg-stone-50 border border-stone-200 rounded-3xl space-y-4">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-800 flex items-center justify-center font-bold">
+                          <Timer className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="font-bold text-stone-900 text-sm">
+                            Unpaid Reference Number Time Limit & Auto-Cancellation Policy
+                          </div>
+                          <p className="text-xs text-stone-500">
+                            Automatically cancel bookings and release stylist slots back to the calendar if an online reference number is not confirmed within the allocated time limit.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid sm:grid-cols-2 gap-4 pt-1">
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-stone-700 block">
+                            Auto-Cancellation Status
+                          </label>
+                          <div className="pt-1">
+                            <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-semibold text-stone-800">
+                              <input
+                                type="checkbox"
+                                checked={paymentConfig.autoCancelEnabled !== false}
+                                onChange={(e) => setPaymentConfig({
+                                  ...paymentConfig,
+                                  autoCancelEnabled: e.target.checked
+                                })}
+                                className="w-4 h-4 rounded text-rose-800 focus:ring-rose-500"
+                              />
+                              <span>Enable Auto-Cancellation for Overdue References</span>
+                            </label>
+                          </div>
+                          <p className="text-[11px] text-stone-500">
+                            Prevents fake reference numbers from locking salon chairs indefinitely.
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="text-xs font-bold text-stone-700 block mb-1">
+                            Hold Time Limit Duration
+                          </label>
+                          <select
+                            value={paymentConfig.autoCancelTimeoutMinutes ?? 15}
+                            onChange={(e) => setPaymentConfig({
+                              ...paymentConfig,
+                              autoCancelTimeoutMinutes: parseInt(e.target.value, 10)
+                            })}
+                            className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs sm:text-sm font-bold text-stone-800"
+                          >
+                            <option value={10}>10 Minutes (Peak Mall Hours / Fast Turnover)</option>
+                            <option value={15}>15 Minutes (Default Recommended Hold)</option>
+                            <option value={30}>30 Minutes (Standard Grace Window)</option>
+                            <option value={60}>60 Minutes (1 Hour Relaxed Clearing)</option>
+                            <option value={120}>120 Minutes (2 Hours Maximum)</option>
+                          </select>
+                          <p className="text-[11px] text-stone-500 mt-1">
+                            A live countdown timer is shown on the customer's payment screen and receipt.
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -1753,6 +1954,52 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                   </div>
                 </div>
 
+                {/* Hold Time Limit & Auto-Cancel Status */}
+                <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                  <div className="flex items-start sm:items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-amber-200 text-amber-900 flex items-center justify-center shrink-0">
+                      <Timer className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="font-bold text-amber-950 flex items-center gap-1.5 flex-wrap">
+                        <span>Payment Reference Hold Window</span>
+                        {verifyingBooking.isAutoCancelledDueToTimeout && (
+                          <span className="text-[10px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-bold border border-rose-300">
+                            Auto-Cancelled
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-stone-600 mt-0.5">
+                        Booked at {new Date(verifyingBooking.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · 
+                        {verifyingBooking.paymentDeadline 
+                          ? ` Deadline: ${new Date(verifyingBooking.paymentDeadline).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` 
+                          : ` Standard ${paymentConfig.autoCancelTimeoutMinutes || 15}-minute window`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    {(() => {
+                      const rem = formatTimeRemaining(verifyingBooking.paymentDeadline);
+                      if (verifyingBooking.status === 'cancelled') {
+                        return (
+                          <span className="inline-block text-[11px] font-bold text-rose-800 bg-rose-100 px-2 py-0.5 rounded border border-rose-300">
+                            Cancelled & Released
+                          </span>
+                        );
+                      }
+                      return (
+                        <span className={`inline-block font-mono font-bold text-xs px-2.5 py-1 rounded border ${
+                          rem.isExpired 
+                            ? 'bg-rose-100 text-rose-800 border-rose-300' 
+                            : 'bg-amber-100 text-amber-950 border-amber-300'
+                        }`}>
+                          ⏱️ {rem.isExpired ? 'Time Limit Expired' : `${rem.text} remaining`}
+                        </span>
+                      );
+                    })()}
+                  </div>
+                </div>
+
                 {/* Automated Security & Anti-Fraud Analysis */}
                 <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
                   <h4 className="font-bold text-stone-800 flex items-center gap-1.5 text-xs">
@@ -1861,53 +2108,159 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                 </div>
 
                 {/* 3-Step Cross Check SOP Guide for Receptionist */}
-                <div className="p-3 bg-blue-50/70 rounded-xl border border-blue-200 text-[11px] text-blue-950 space-y-2">
-                  <h4 className="font-bold flex items-center gap-1.5 text-blue-900">
-                    <Phone className="w-3.5 h-3.5" />
-                    Salon Phone Cross-Check Guide (Free Method)
-                  </h4>
-                  <ol className="list-decimal pl-4 space-y-1 text-stone-700">
-                    <li>
-                      Open the official salon phone receiving payments ({BUSINESS_INFO.contact.mobile || BUSINESS_INFO.contact.phone}).
-                    </li>
-                    <li>
-                      Check SMS from <strong>{verifyingBooking.paymentMethod === 'gcash' ? '2882 (GCash)' : 'MAYA / MAYABANK'}</strong> or open the wallet app transaction history.
-                    </li>
-                    <li>
-                      Confirm that a payment of <strong>₱{verifyingBooking.paidAmount.toLocaleString()}</strong> was received with reference matching <strong>{verifyingBooking.paymentReference}</strong>.
-                    </li>
-                  </ol>
-                </div>
+                {verifyingBooking.paymentMethod === 'bank_transfer' ? (
+                  <div className="p-3 bg-amber-50/70 rounded-xl border border-amber-200 text-[11px] text-amber-950 space-y-2">
+                    <h4 className="font-bold flex items-center gap-1.5 text-amber-900">
+                      <CreditCard className="w-3.5 h-3.5" />
+                      Direct Bank Transfer & InstaPay Cross-Check Guide (No QR)
+                    </h4>
+                    <ol className="list-decimal pl-4 space-y-1 text-stone-700">
+                      <li>
+                        Log in to Salon MD&apos;s <strong>BDO Digital Banking</strong> (Acct {paymentConfig.bank.bdo.accountNumber}) or <strong>BPI Online</strong> (Acct {paymentConfig.bank.bpi.accountNumber}).
+                      </li>
+                      <li>
+                        Go to Transaction History and search for amount <strong>₱{verifyingBooking.paidAmount.toLocaleString()}</strong> received on or around {verifyingBooking.date}.
+                      </li>
+                      <li>
+                        Confirm that reference/trace number <strong>{verifyingBooking.paymentReference}</strong> and sender name match. If NOT found, use the Cancel Appointment button below to release the slot.
+                      </li>
+                    </ol>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-blue-50/70 rounded-xl border border-blue-200 text-[11px] text-blue-950 space-y-2">
+                    <h4 className="font-bold flex items-center gap-1.5 text-blue-900">
+                      <Phone className="w-3.5 h-3.5" />
+                      Salon Phone Cross-Check Guide (GCash / Maya)
+                    </h4>
+                    <ol className="list-decimal pl-4 space-y-1 text-stone-700">
+                      <li>
+                        Open the official salon phone receiving payments ({BUSINESS_INFO.contact.mobile || BUSINESS_INFO.contact.phone}).
+                      </li>
+                      <li>
+                        Check SMS from <strong>{verifyingBooking.paymentMethod === 'gcash' ? '2882 (GCash)' : 'MAYA / MAYABANK'}</strong> or open the wallet app transaction history.
+                      </li>
+                      <li>
+                        Confirm that a payment of <strong>₱{verifyingBooking.paidAmount.toLocaleString()}</strong> was received with reference matching <strong>{verifyingBooking.paymentReference}</strong>.
+                      </li>
+                    </ol>
+                  </div>
+                )}
+
+                {/* Cancelled State Display */}
+                {verifyingBooking.status === 'cancelled' && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs space-y-1.5">
+                    <div className="font-bold text-rose-900 flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>Appointment Cancelled & Slot Released</span>
+                    </div>
+                    <p className="text-rose-800 text-[11px]">
+                      <strong>Reason:</strong> {verifyingBooking.cancellationReason || 'Payment reference invalid or not found in bank records.'}
+                    </p>
+                    {verifyingBooking.cancelledAt && (
+                      <div className="text-[10px] text-stone-500">
+                        Cancelled on: {new Date(verifyingBooking.cancelledAt).toLocaleString()}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDispatchingBooking(verifyingBooking);
+                          setDispatcherTemplate('cancellation');
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-lg font-bold text-[11px] transition-colors shadow-2xs"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                        Send Cancellation SMS / Viber / Copy
+                      </button>
+                      <a
+                        href={`tel:${verifyingBooking.customer.mobile.replace(/[^0-9]/g, '')}`}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-md font-semibold text-[11px] transition-colors border border-stone-200"
+                      >
+                        <Phone className="w-3 h-3 text-stone-600" />
+                        Call Customer
+                      </a>
+                    </div>
+                  </div>
+                )}
+
+                {/* Active Cancellation Prompt Box */}
+                {verifyingBooking.status !== 'cancelled' && showCancelPrompt && (
+                  <div className="p-3.5 bg-rose-50 border border-rose-300 rounded-xl text-xs space-y-2.5 animate-fade-in">
+                    <div className="font-bold text-rose-950 flex items-center gap-1.5 text-xs">
+                      <ShieldAlert className="w-4 h-4 text-rose-700 shrink-0" />
+                      <span>Cancel Appointment Due to Illegitimate / Fake Reference</span>
+                    </div>
+                    <p className="text-[11px] text-rose-800">
+                      Cancelling will immediately release the slot (<strong>{verifyingBooking.date} @ {verifyingBooking.timeSlot}</strong>) for other clients and mark this booking as cancelled.
+                    </p>
+                    <div>
+                      <label className="text-[11px] font-bold text-stone-700 block mb-1">Select Cancellation Reason:</label>
+                      <select
+                        value={selectedCancelReason}
+                        onChange={(e) => setSelectedCancelReason(e.target.value)}
+                        className="w-full text-xs p-2 bg-white border border-rose-200 rounded-lg text-stone-800 font-medium focus:outline-none focus:ring-1 focus:ring-rose-800"
+                      >
+                        <option value="Fake or unverified reference number: No matching payment found in bank/wallet records.">Fake or unverified reference: Not found in bank/wallet</option>
+                        <option value="Duplicate reference: Receipt already used on another booking.">Duplicate reference: Recycled receipt</option>
+                        <option value="Payment verification window expired: No valid payment proof submitted.">Expired verification window (unpaid)</option>
+                        <option value="Amount discrepancy: Sent deposit is less than required minimum.">Amount discrepancy (deposit short)</option>
+                        <option value="Customer requested cancellation after payment inquiry.">Customer requested cancellation</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleCancelForInvalidPayment(verifyingBooking.id, selectedCancelReason, customCancelNote)}
+                        className="px-3.5 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-lg font-bold text-xs flex items-center gap-1 transition-colors shadow-2xs"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        Confirm Cancellation & Release Slot
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowCancelPrompt(false)}
+                        className="px-3 py-1.5 border border-stone-300 hover:bg-stone-100 rounded-lg text-stone-700 font-semibold text-xs"
+                      >
+                        Back
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons */}
               <div className="pt-3 border-t border-stone-100 flex flex-wrap items-center justify-between gap-2 shrink-0">
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleUpdateVerification(verifyingBooking.id, 'verified');
-                      setVerifyingBooking(null);
-                    }}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center gap-1.5 text-xs transition-colors shadow-xs"
-                  >
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    Approve & Mark Verified
-                  </button>
+                  {verifyingBooking.status !== 'cancelled' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleUpdateVerification(verifyingBooking.id, 'verified');
+                          setVerifyingBooking(null);
+                        }}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center gap-1.5 text-xs transition-colors shadow-xs"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Approve & Mark Verified
+                      </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleUpdateVerification(verifyingBooking.id, 'flagged');
-                      setVerifyingBooking(null);
-                    }}
-                    className="px-3.5 py-2 bg-rose-100 hover:bg-rose-200 text-rose-800 border border-rose-300 rounded-xl font-bold flex items-center gap-1.5 text-xs transition-colors"
-                  >
-                    <ShieldAlert className="w-3.5 h-3.5" />
-                    Flag as Invalid / Unpaid
-                  </button>
+                      {!showCancelPrompt && (
+                        <button
+                          type="button"
+                          onClick={() => setShowCancelPrompt(true)}
+                          className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold flex items-center gap-1.5 text-xs transition-colors shadow-xs"
+                          title="Cancel appointment and release slot because reference is fake or unverified"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Cancel (Fake/Invalid Ref)
+                        </button>
+                      )}
+                    </>
+                  )}
 
-                  {verifyingBooking.paymentVerificationStatus && (
+                  {verifyingBooking.paymentVerificationStatus && verifyingBooking.status !== 'cancelled' && (
                     <button
                       type="button"
                       onClick={() => {
@@ -1923,7 +2276,10 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => setVerifyingBooking(null)}
+                  onClick={() => {
+                    setVerifyingBooking(null);
+                    setShowCancelPrompt(false);
+                  }}
                   className="px-4 py-2 border border-stone-200 hover:bg-stone-100 rounded-xl text-stone-700 font-semibold text-xs"
                 >
                   Close
@@ -1962,6 +2318,14 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
             </div>
           </div>
         )}
+
+        {/* Customer SMS & Messaging Dispatcher Modal */}
+        <MessageDispatcherModal
+          isOpen={!!dispatchingBooking}
+          onClose={() => setDispatchingBooking(null)}
+          booking={dispatchingBooking}
+          defaultTemplate={dispatcherTemplate}
+        />
       </div>
     </div>
   );
