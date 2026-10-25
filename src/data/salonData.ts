@@ -661,6 +661,8 @@ export const TIME_SLOTS = [
 export const PAYMENT_CONFIG = {
   downpaymentPercent: 0.25, // 25% down payment deposit to secure slot
   prepayFullDiscountPercent: 0.05, // 5% discount if paid in full online
+  autoCancelTimeoutMinutes: 15, // 15-minute slot hold for unpaid/unverified reference numbers
+  autoCancelEnabled: true, // Automatically cancel unpaid reference numbers when time expires
   gcash: {
     merchantName: 'SALON MD CIRCLE C MALL',
     accountNumber: '0917 584 7219',
