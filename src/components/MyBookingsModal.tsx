@@ -13,10 +13,12 @@ import {
   Printer, 
   Phone,
   Trash2,
-  Sparkles
+  Sparkles,
+  Timer
 } from 'lucide-react';
 import { BookingRecord } from '../types';
 import { BUSINESS_INFO } from '../data/salonData';
+import { formatTimeRemaining, checkAndExpireOverdueBookings } from '../utils/storage';
 
 interface MyBookingsModalProps {
   isOpen: boolean;
@@ -32,9 +34,11 @@ export const MyBookingsModal: React.FC<MyBookingsModalProps> = ({
   const [bookings, setBookings] = useState<BookingRecord[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBooking, setSelectedBooking] = useState<BookingRecord | null>(null);
+  const [ticker, setTicker] = useState(Date.now());
 
   const loadBookings = () => {
     try {
+      checkAndExpireOverdueBookings();
       const stored = localStorage.getItem('salon_md_bookings');
       if (stored) {
         setBookings(JSON.parse(stored));
@@ -49,6 +53,10 @@ export const MyBookingsModal: React.FC<MyBookingsModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       loadBookings();
+      const interval = setInterval(() => {
+        setTicker(Date.now());
+      }, 1000);
+      return () => clearInterval(interval);
     }
   }, [isOpen]);
 
@@ -199,6 +207,72 @@ export const MyBookingsModal: React.FC<MyBookingsModalProps> = ({
                     </div>
                   </div>
 
+                  {/* Cancellation Reason Alert */}
+                  {b.status === 'cancelled' && (
+                    <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs space-y-1.5 mb-3">
+                      <div className="font-bold text-rose-900 flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                          <span>
+                            {b.isAutoCancelledDueToTimeout ? 'Appointment Automatically Cancelled (Time Limit Expired)' : 'Appointment Cancelled'}
+                          </span>
+                        </div>
+                        {b.isAutoCancelledDueToTimeout && (
+                          <span className="text-[10px] bg-rose-200 text-rose-900 px-1.5 py-0.5 rounded font-bold">
+                            Slot Freed
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-rose-800 text-[11px] leading-relaxed">
+                        <strong>Reason:</strong> {b.cancellationReason || 'Payment reference could not be verified in salon bank/wallet accounts.'}
+                      </p>
+                      {b.cancelledAt && (
+                        <div className="text-[10px] text-stone-500">
+                          Cancelled on {new Date(b.cancelledAt).toLocaleString()} · Stylist slot released back to salon
+                        </div>
+                      )}
+                      <div className="pt-1 flex items-center justify-between flex-wrap gap-2">
+                        <p className="text-stone-600 text-[11px]">
+                          Need this appointment? Slots can be re-booked with an updated payment receipt.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClose();
+                            onOpenNewBooking();
+                          }}
+                          className="px-3 py-1.5 bg-rose-800 hover:bg-rose-900 text-white rounded-lg font-bold text-[11px] transition-colors shadow-2xs"
+                        >
+                          Re-Book Appointment
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Pending Verification Notice with Countdown Timer */}
+                  {b.status === 'confirmed' && b.paymentVerificationStatus === 'pending' && (
+                    <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900 mb-3 space-y-1.5 animate-fade-in">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="font-bold text-amber-950 flex items-center gap-1.5">
+                          <Clock className="w-4 h-4 text-amber-700 shrink-0 animate-pulse" />
+                          <span>Payment Verification Window Active</span>
+                        </div>
+                        {b.paymentDeadline && (
+                          <span className={`font-mono font-bold px-2 py-0.5 rounded text-[11px] ${
+                            formatTimeRemaining(b.paymentDeadline).isExpired
+                              ? 'bg-rose-200 text-rose-900'
+                              : 'bg-amber-200 text-amber-950'
+                          }`}>
+                            ⏱️ {formatTimeRemaining(b.paymentDeadline).isExpired ? 'Time Limit Expired' : `${formatTimeRemaining(b.paymentDeadline).text} left`}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-stone-600 text-[11px] leading-relaxed">
+                        Reference <strong className="font-mono text-stone-900">#{b.paymentReference}</strong> is currently queued for front desk verification. If payment is unreceived or cannot be verified within the hold period, this slot is automatically released.
+                      </p>
+                    </div>
+                  )}
+
                   {/* Financials & Actions */}
                   <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-1">
                     <div className="text-xs">
@@ -218,6 +292,18 @@ export const MyBookingsModal: React.FC<MyBookingsModalProps> = ({
                           className="px-3 py-1.5 text-stone-400 hover:text-rose-700 rounded-lg text-xs font-medium transition-colors"
                         >
                           Cancel Slot
+                        </button>
+                      )}
+
+                      {b.status === 'cancelled' && (
+                        <button
+                          onClick={() => {
+                            onClose();
+                            onOpenNewBooking();
+                          }}
+                          className="px-3 py-1.5 bg-rose-800 text-white rounded-lg text-xs font-semibold hover:bg-rose-900 transition-colors"
+                        >
+                          Rebook Appointment
                         </button>
                       )}
 
